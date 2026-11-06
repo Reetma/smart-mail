@@ -1,0 +1,73 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Mail",
+  "version": "1.4.0",
+  "description": "Smart Mail : relève les adresses que propose le champ À d'Outlook web dans un annuaire commun, puis envoie le même message à chacune, un par un, comme à la main. Rien ne passe par un serveur.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "downloads",
+    "power",
+    "clipboardWrite"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Afficher ou masquer Smart Mail",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.cloud.microsoft/*",
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "adresses/shim.js",
+        "adresses/core/planif.js",
+        "adresses/core/moteur.js",
+        "adresses/lecture.js",
+        "adresses/adapter-dom.js",
+        "adresses/armement.js",
+        "adresses/adapter-io.js",
+        "adresses/natif.js",
+        "adresses/panel.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.cloud.microsoft/*"
+      ],
+      "js": [
+        "publipostage/vendor/purify.min.js",
+        "publipostage/message.js",
+        "publipostage/modele.js",
+        "publipostage/outlook.js",
+        "publipostage/moteur.js",
+        "publipostage/panneau.js",
+        "mega.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

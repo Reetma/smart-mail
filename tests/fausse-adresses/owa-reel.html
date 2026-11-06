@@ -1,0 +1,71 @@
+<!doctype html>
+<html data-ao-source="outlook">
+<head><meta charset="utf-8"><title>Faux OWA réel</title></head>
+<body>
+  <h1>Faux OWA (contenteditable « À », boîte de réception permanente, « Afficher plus de résultats »)</h1>
+
+  <!-- Boîte de réception : [role="listbox"] PERMANENTE et visible, dont un aperçu
+       contient une adresse. L'outil ne doit JAMAIS la lire comme des suggestions
+       (sinon il récolterait noreply@email.apple.com). Reproduit le vrai OWA. -->
+  <div role="listbox" aria-label="Liste des messages">
+    <div role="option">iCloud — Vous n'obtenez pas souvent d'e-mail à partir de noreply@email.apple.com</div>
+    <div role="option">Microsoft Learn — learn@mails.microsoft.com</div>
+  </div>
+
+  <!-- Rédaction en ligne (pas de role="dialog"). Champ « À » = contenteditable
+       avec aria-label="À", SANS aria-controls (exactement le vrai OWA). -->
+  <section aria-label="Nouveau message">
+    <div aria-label="À" contenteditable="true" id="to1" tabindex="0"></div>
+    <!-- Leurre : un CHAMP DE SAISIE qui porte le même libellé (placeholder). Le cliquer
+         ferait quitter « À » : l'outil ne doit JAMAIS le viser. -->
+    <input id="leurre" placeholder="Afficher plus de résultats" aria-label="Afficher plus de résultats">
+    <div aria-label="Corps du message" role="textbox" contenteditable="true" id="body1" tabindex="0"></div>
+
+    <!-- Le callout des suggestions : la liste de contacts, PUIS un pied de page
+         FRÈRE (hors de la listbox) avec « Afficher plus de résultats ». C'est la
+         disposition réelle d'OWA : la ligne n'est pas dans la [role="listbox"]. -->
+    <div id="callout">
+      <div role="listbox" aria-label="Contacts suggérés" id="sugg"></div>
+      <div id="footer">
+        <div role="button" tabindex="0" id="ao-more" hidden>🔍 Afficher plus de résultats</div>
+      </div>
+    </div>
+  </section>
+
+  <script type="module">
+    import { ask } from "./book.js";
+    const to = document.getElementById("to1");
+    const sugg = document.getElementById("sugg");
+    const more = document.getElementById("ao-more");
+    const typed = (window.__typed = []);
+    window.__keys = [];
+    window.__moreClicks = 0;
+    let seg = "", shown = 0, curQ = "";
+    // Comme le vrai OWA : au départ la liste ne montre AUCUN contact (INIT = 0,
+    // rien en cache : seule la ligne « Afficher plus de résultats » est là, c'est elle
+    // qui interroge l'annuaire), et chaque clic en déroule BATCH de plus, jusqu'à
+    // épuisement. L'outil doit donc cliquer même quand la liste est vide.
+    const INIT = 0, BATCH = 2;
+    window.__leurreFocus = 0;
+    document.getElementById("leurre").addEventListener("focus", () => { window.__leurreFocus++; });
+    function track(v) { if (v === "") { if (seg) { typed.push(seg); seg = ""; } } else if (v.length >= seg.length) seg = v; }
+    function render() {
+      const full = curQ ? ask(curQ) : [];
+      const list = full.slice(0, shown);
+      sugg.innerHTML = "";
+      for (const c of list) {
+        const opt = document.createElement("div"); opt.setAttribute("role", "option");
+        const n = document.createElement("span"); n.textContent = c.name;
+        const m = document.createElement("span"); m.textContent = c.mail;
+        opt.appendChild(n); opt.appendChild(m); sugg.appendChild(opt);
+      }
+      more.hidden = !(curQ && full.length > shown); // la ligne disparaît quand tout est montré
+    }
+    to.addEventListener("input", () => { curQ = (to.textContent || "").trim(); track(curQ); shown = INIT; render(); });
+    to.addEventListener("keydown", (e) => window.__keys.push(e.key));
+    // Clic sur « Afficher plus de résultats » : déroule le lot suivant, même liste.
+    more.addEventListener("click", () => { window.__moreClicks++; shown += BATCH; render(); });
+    document.addEventListener("ao-run-begin", () => { typed.length = 0; window.__keys.length = 0; seg = ""; window.__moreClicks = 0; shown = INIT; });
+  </script>
+</body>
+</html>

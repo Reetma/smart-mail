@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="fr" data-pp-test="rapide">
+<head>
+<meta charset="utf-8">
+<title>Courrier - Testeur - Outlook</title>
+<!--
+  Faux « nouvel Outlook » (outlook.cloud.microsoft, interface FR) pour l'audit
+  « champ visé, brouillons de l'utilisateur et vol du focus ».
+
+  FIDÈLE à la fiche de référence (diagnostic réel) :
+   - champ « À » = <div aria-label="À" tabindex="0" class="… EditorClass" contenteditable="true">, sans role ni aria-controls ;
+   - pastille destinataire DANS le champ : <span id="REK…" class="_Entity _EType_RECIPIENT_ENTITY _EReadonly_1"
+     contenteditable="false" aria-label="offline<NOM>"> + espace de largeur nulle ; elle montre le NOM ;
+   - Objet = <input aria-label="Objet" placeholder="Ajouter un objet" maxlength="255"> ;
+   - Corps = <div role="textbox" aria-multiline="true" aria-label="Corps du message" contenteditable="true">, paragraphes
+     div.elementToProof, signature dans le corps ;
+   - Envoyer = bouton id="splitButton-…__primaryActionButton" aria-label="Envoyer" + « Autres options d'envoi » ;
+     « Abandonner », « Isoler », « Réglez votre sensibilité » ;
+   - rédaction ouverte = onglet role="tab" « Modification de <objet> » ;
+   - barre de recherche input role="combobox" aria-label="Recherchez des e-mails, des réunions, des fichiers et plus encore." ;
+   - boutons « Conversation Teams », « Ma journée », « Notifications », « Paramètres », volet de gauche (Courrier,
+     Calendrier, Contacts, To Do), liste des messages (listbox « Liste des messages »).
+
+  PLAUSIBLE (non confirmé par un diagnostic, modélisé comme variante) :
+   - une seule rédaction visible à la fois dans le volet de lecture, les autres en onglets masqués (display:none) ;
+   - réponse en ligne sous le message lu, sans champ Objet, « À » pré-rempli avec la pastille de l'expéditeur ;
+   - liste de suggestions « portalisée » en fin de page, fermée quand le champ perd le focus ; Entrée/Tab valident
+     la première suggestion, « ; » ou « , » valident le texte tapé ;
+   - discussion Teams intégrée dans le DOM principal (zone « Tapez un message » + bouton « Envoyer ») ;
+   - formulaires Calendrier (titre, participants, description), Contacts, Paramètres (fenêtre modale, éditeur de signature) ;
+   - notification (toast) qui prend le focus.
+
+  Instrumentation (monde principal) : window.__journal (input / keydown / paste / click / focusin, avec la zone
+  data-zone de la cible et isTrusted), html[data-envoyes] (mails « envoyés » avec le propriétaire de la rédaction :
+  « utilisateur » si ouverte par un vrai clic, « extension » si clic synthétique), window.ow (pilotage pour les tests).
+-->
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; } /* comme le vrai Outlook : une vue masquée n'est pas rendue */
+  body { font-family: "Segoe UI", sans-serif; margin: 0; font-size: 13px; color: #222; }
+  #app { width: 1150px; }
+  header[role="banner"] { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #0f6cbd; height: 44px; }
+  header input { width: 420px; padding: 4px; }
+  header button { background: #fff; border: 0; border-radius: 4px; padding: 4px 8px; }
+  #principal { display: flex; height: 900px; }
+  nav#rail { width: 90px; display: flex; flex-direction: column; gap: 4px; padding: 6px; background: #f3f3f3; }
+  nav#rail button { font-size: 12px; }
+  #centre { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #ruban { padding: 4px 10px; border-bottom: 1px solid #ddd; display: flex; gap: 6px; flex-wrap: wrap; min-height: 34px; }
+  .vue { flex: 1; display: flex; min-width: 0; min-height: 0; }
+  #liste { width: 280px; border-right: 1px solid #ddd; overflow: auto; }
+  #liste [role="option"], #resultats [role="option"] { padding: 6px; border-bottom: 1px solid #eee; cursor: pointer; }
+  #volet { flex: 1; padding: 8px; overflow: auto; min-width: 0; }
+  [contenteditable="true"] { border: 1px solid #ccc; min-height: 22px; padding: 3px; }
+  .redaction { border: 1px solid #bbb; padding: 6px; margin-top: 6px; }
+  .LCArn { display: flex; gap: 4px; align-items: flex-start; margin: 3px 0; }
+  .LCArn > div[contenteditable] { flex: 1; }
+  ._EType_RECIPIENT_ENTITY { background: #e8eefc; border-radius: 10px; padding: 0 6px; margin-right: 3px; display: inline-block; }
+  .callout { position: fixed; background: #fff; border: 1px solid #999; box-shadow: 0 4px 12px rgba(0,0,0,.2); z-index: 1000; width: 360px; }
+  .callout [role="option"] { padding: 4px 8px; display: flex; flex-direction: column; cursor: pointer; }
+  #teams { width: 260px; border-left: 1px solid #ddd; padding: 6px; }
+  .toast { position: fixed; bottom: 20px; left: 120px; background: #333; color: #fff; padding: 10px; z-index: 1500; width: 360px; }
+  .modal-fond { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 1200; }
+  .ms-Modal { position: fixed; top: 70px; left: 140px; width: 620px; height: 440px; background: #fff; z-index: 1300; padding: 10px; }
+  .elementToProof { font-family: Aptos, sans-serif; }
+  #corpsApp-masque { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header role="banner">
+    <span style="color:#fff;font-weight:700">Outlook</span>
+    <input id="recherche" type="text" role="combobox" aria-expanded="false" autocomplete="off" data-zone="recherche"
+      aria-label="Recherchez des e-mails, des réunions, des fichiers et plus encore." placeholder="Rechercher">
+    <button type="button" aria-label="Conversation Teams" id="btn-teams">Teams</button>
+    <button type="button" aria-label="Ma journée">Ma journée</button>
+    <button type="button" aria-label="Notifications">🔔</button>
+    <button type="button" aria-label="Paramètres" id="btn-parametres">⚙</button>
+  </header>
+  <div id="principal">
+    <nav id="rail" aria-label="Navigation">
+      <button type="button" aria-label="Courrier" data-vue="courrier">Courrier</button>
+      <button type="button" aria-label="Calendrier" data-vue="calendrier">Calendrier</button>
+      <button type="button" aria-label="Contacts" data-vue="contacts">Contacts</button>
+      <button type="button" aria-label="To Do" data-vue="todo">To Do</button>
+    </nav>
+    <div id="centre">
+      <div id="ruban" role="toolbar" aria-label="Ruban"></div>
+      <div class="vue" id="vue-courrier">
+        <div id="dossiers" role="tree" aria-label="Dossiers" style="width:110px;padding:6px;border-right:1px solid #eee">
+          <div role="treeitem" aria-selected="true">Boîte de réception</div>
+          <div role="treeitem">Brouillons</div>
+          <div role="treeitem">Éléments envoyés</div>
+        </div>
+        <div id="liste" role="listbox" aria-label="Liste des messages"></div>
+        <div id="resultats" role="listbox" aria-label="Résultats de la recherche" hidden style="width:280px;border-right:1px solid #ddd"></div>
+        <div id="volet" role="main" aria-label="Volet de lecture">
+          <div role="tablist" aria-label="Brouillons ouverts" id="onglets" style="display:flex;gap:4px"></div>
+          <div id="lecture"></div>
+          <div id="redactions"></div>
+        </div>
+        <aside id="teams" role="complementary" aria-label="Conversation Teams" hidden>
+          <b>Conversation Teams</b>
+          <div id="teams-fil" style="min-height:80px"><div>Claire : tu as vu le planning ?</div></div>
+          <div role="textbox" contenteditable="true" aria-multiline="true" aria-label="Tapez un message" id="teams-saisie" data-zone="teams"></div>
+          <button type="button" aria-label="Envoyer" id="teams-envoyer" data-zone="teams-bouton">➤</button>
+        </aside>
+      </div>
+      <div class="vue" id="vue-calendrier" hidden>
+        <div style="padding:8px;flex:1">
+          <button type="button" aria-label="Nouvel événement" id="nouvel-evenement">Nouvel événement</button>
+          <div id="evenement" hidden style="margin-top:8px">
+            <input type="text" aria-label="Ajouter un titre" placeholder="Ajouter un titre" id="ev-titre" data-zone="cal-titre" style="width:420px">
+            <div style="display:flex;gap:4px;margin-top:4px"><span>Participants</span>
+              <div contenteditable="true" tabindex="0" aria-label="Inviter des participants" id="ev-participants" data-zone="cal-participants" data-champ="dest" style="flex:1"></div></div>
+            <div role="textbox" contenteditable="true" aria-multiline="true" aria-label="Ajouter une description ou des pièces jointes" id="ev-description" data-zone="cal-description" style="min-height:80px;margin-top:4px"></div>
+            <button type="button" aria-label="Enregistrer">Enregistrer</button>
+          </div>
+          <div role="grid" aria-label="Calendrier" style="margin-top:10px"><div role="row"><div role="gridcell">Lundi 9 h — Réunion d'équipe</div></div></div>
+        </div>
+      </div>
+      <div class="vue" id="vue-contacts" hidden>
+        <div style="padding:8px;flex:1">
+          <button type="button" aria-label="Nouveau contact" id="nouveau-contact">Nouveau contact</button>
+          <div id="fiche-contact" hidden style="margin-top:8px;display:flex;flex-direction:column;gap:4px;width:420px">
+            <input type="text" aria-label="Prénom" id="ct-prenom" data-zone="contact-prenom">
+            <input type="text" aria-label="Nom" id="ct-nom" data-zone="contact-nom">
+            <input type="text" aria-label="Adresse e-mail" id="ct-mail" data-zone="contact-mail">
+          </div>
+          <div role="grid" aria-label="Contacts" style="margin-top:10px"><div role="row"><div role="gridcell">Paul Durand — paul.durand@exemple.fr</div></div></div>
+        </div>
+      </div>
+      <div class="vue" id="vue-todo" hidden><div style="padding:8px">To Do</div></div>
+    </div>
+  </div>
+</div>
+<div id="portail"></div>
+<script>
+(function () {
+  "use strict";
+  // ------------------------------------------------------------ journal
+  var J = (window.__journal = []);
+  var envoyes = (window.envoyes = []);
+  var teamsEnvoyes = (window.__teamsEnvoyes = []);
+  function publier() { document.documentElement.dataset.envoyes = JSON.stringify(envoyes); }
+  publier();
+  function zoneDe(el) {
+    var z = el && el.closest && el.closest("[data-zone]");
+    if (z) return z.dataset.zone;
+    if (!el || !el.tagName) return "?";
+    if (el.closest && el.closest("[data-testid='ao-panel'],[data-pp-panneau]")) return "panneau";
+    return el.tagName.toLowerCase() + (el.id ? "#" + el.id : "");
+  }
+  function noter(type, cible, confiance, extra) {
+    var o = { type: type, zone: zoneDe(cible), confiance: !!confiance, t: Math.round(performance.now()) };
+    if (extra) for (var k in extra) o[k] = extra[k];
+    J.push(o);
+    return o;
+  }
+  // Attribution d'une saisie : Chrome marque FIABLES (isTrusted) les « input » produits par execCommand, même
+  // appelé par l'extension. On attribue donc chaque « input » au geste qui le précède dans la MÊME tâche :
+  // touche ou collage synthétique (extension) ou réel (utilisateur). Sans geste : « extension » si l'événement
+  // est synthétique, « inconnue » sinon (ex. execCommand sans touche).
+  var origine = null, origineT = null;
+  function marquer(o) { origine = o; clearTimeout(origineT); origineT = setTimeout(function () { origine = null; }, 0); }
+  document.addEventListener("input", function (e) {
+    var o = origine || (e.isTrusted ? "inconnue" : "extension");
+    noter("input", e.target, o === "utilisateur", { inputType: e.inputType, data: e.data, origine: o });
+  }, true);
+  document.addEventListener("keydown", function (e) { marquer(e.isTrusted ? "utilisateur" : "extension"); noter("keydown", e.target, e.isTrusted, { key: e.key }); }, true);
+  document.addEventListener("paste", function (e) { marquer(e.isTrusted ? "utilisateur" : "extension"); noter("paste", e.target, e.isTrusted, { texte: e.clipboardData ? (e.clipboardData.getData("text/plain") || "").slice(0, 80) : null }); }, true);
+  document.addEventListener("focusin", function (e) { noter("focusin", e.target, e.isTrusted); }, true);
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest && e.target.closest("button,[role='button'],[role='option'],[role='tab'],[role='menuitem']");
+    if (b && !(b.closest && b.closest("[data-testid='ao-panel'],[data-pp-panneau]"))) noter("click", b, e.isTrusted, { libelle: (b.getAttribute("aria-label") || b.textContent || "").trim().slice(0, 60) });
+  }, true);
+
+  // ------------------------------------------------------------ annuaire
+  var CARNET = [
+    ["Paul Durand", "paul.durand@exemple.fr"], ["Claire Petit", "claire.petit@exemple.fr"],
+    ["Alice Martin", "alice.martin@exemple.fr"], ["Antoine Leroy", "antoine.leroy@exemple.fr"],
+    ["Amandine Roux", "amandine.roux@exemple.fr"], ["Adèle Morel", "adele.morel@exemple.fr"],
+    ["Arthur Blanc", "arthur.blanc@exemple.fr"], ["Bruno Faure", "bruno.faure@exemple.fr"],
+    ["Brigitte Henry", "brigitte.henry@exemple.fr"], ["Camille Girard", "camille.girard@exemple.fr"],
+    ["Céline Moreau", "celine.moreau@exemple.fr"], ["David Lambert", "david.lambert@exemple.fr"],
+    ["Émilie Robin", "emilie.robin@exemple.fr"], ["Fanny Lopez", "fanny.lopez@exemple.fr"],
+    ["Service RH", "rh@exemple.fr"], ["Martin Dupont", "martin.dupont@exemple.fr"],
+    ["Marie Martin", "marie.martin@exemple.fr"], ["Hugo Fontaine", "hugo.fontaine@exemple.fr"],
+    ["Inès Vincent", "ines.vincent@exemple.fr"], ["Julie Henry", "julie.henry@exemple.fr"]
+  ];
+  function norm(s) { return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""); }
+  function mots(s) { return norm(s).split(/[^a-z0-9]+/).filter(Boolean); }
+  function chercher(q) {
+    var qw = mots(q);
+    if (!qw.length) return [];
+    return CARNET.filter(function (c) { var t = mots(c[0] + " " + c[1]); return qw.every(function (w) { return t.some(function (x) { return x.indexOf(w) === 0; }); }); }).slice(0, 5);
+  }
+  function nomDe(adr) { var a = String(adr).toLowerCase(); for (var i = 0; i < CARNET.length; i++) if (CARNET[i][1] === a) return CARNET[i][0]; return adr; }
+
+  // ------------------------------------------------------------ messages
+  var MESSAGES = [
+    { de: "Paul Durand", adr: "paul.durand@exemple.fr", objet: "Planning de la semaine", texte: "Bonjour, peux-tu me renvoyer le planning ? Paul" },
+    { de: "Service RH", adr: "rh@exemple.fr", objet: "Congés d'été", texte: "Merci de poser vos congés avant le 15. Contact : rh@exemple.fr" },
+    { de: "Claire Petit", adr: "claire.petit@exemple.fr", objet: "Compte rendu", texte: "Voici le compte rendu de la réunion." },
+    { de: "Lettre d'information", adr: "infolettre@diffusion-exemple.com", objet: "Planning des formations", texte: "Désinscription : infolettre@diffusion-exemple.com" }
+  ];
+  var liste = document.getElementById("liste");
+  MESSAGES.forEach(function (m, i) {
+    var o = document.createElement("div");
+    o.setAttribute("role", "option"); o.dataset.msg = String(i); o.tabIndex = -1;
+    o.setAttribute("aria-label", m.de + " " + m.objet);
+    o.innerHTML = "<b></b><div></div><div class='apercu'></div>";
+    o.children[0].textContent = m.de; o.children[1].textContent = m.objet; o.children[2].textContent = m.texte.slice(0, 60);
+    liste.appendChild(o);
+  });
+
+  // ------------------------------------------------------------ état
+  var seq = 0, compteurPastille = 0;
+  var redactions = {}; // id -> { el, type, proprietaire, msg, onglet }
+  var etat = { vue: "courrier", lu: null, actif: null };
+  var volet = document.getElementById("volet"), lecture = document.getElementById("lecture"), zoneRedactions = document.getElementById("redactions");
+  var ongletsEl = document.getElementById("onglets"), ruban = document.getElementById("ruban");
+  // apresFermeture : "lecture" | "onglet-suivant" ; libelleAbandon : « Abandonner » (vrai Outlook FR, fiche de
+  // référence) ou variante « Ignorer » (ancien OWA FR) / « Discard » (anglais).
+  // curseurFinAuFocus : variante où le champ « À » place le curseur à la fin quand il reçoit le focus.
+  var reglages = { apresFermeture: "lecture", libelleAbandon: "Abandonner", curseurFinAuFocus: false };
+
+  function rendreRuban() {
+    var r = etat.actif ? redactions[etat.actif] : null;
+    ruban.innerHTML = "";
+    var html = '<div role="tablist" aria-label="Onglets du ruban" style="display:flex;gap:4px">' +
+      '<button type="button" role="tab" aria-selected="' + (!r) + '">Accueil</button><button type="button" role="tab" aria-selected="false">Afficher</button><button type="button" role="tab" aria-selected="false">Aide</button>' +
+      (r ? '<button type="button" role="tab" aria-selected="true">Message</button><button type="button" role="tab" aria-selected="false">Insérer</button><button type="button" role="tab" aria-selected="false">Options</button>' : "") +
+      "</div>";
+    // Chaque module a son ruban : « Nouveau courrier » n'existe que dans Courrier (Calendrier : « Nouvel événement »).
+    if (etat.vue === "courrier") {
+      html += '<button type="button" aria-label="Nouveau courrier" title="Nouveau courrier" id="nouveau-courrier">Nouveau courrier</button>';
+      if (r) html += '<button type="button" aria-label="Carnet d\'adresses">Carnet d\'adresses</button><button type="button" aria-label="Importance élevée" aria-pressed="false">Importance élevée</button>';
+      else html += '<button type="button" aria-label="Supprimer">Supprimer</button><button type="button" aria-label="Archiver">Archiver</button>';
+    } else if (etat.vue === "calendrier") html += '<button type="button" aria-label="Aujourd\'hui">Aujourd\'hui</button>';
+    else if (etat.vue === "contacts") html += '<button type="button" aria-label="Exporter les contacts">Exporter</button>';
+    ruban.innerHTML = html;
+  }
+  function rendre() {
+    document.getElementById("vue-courrier").hidden = etat.vue !== "courrier";
+    document.getElementById("vue-calendrier").hidden = etat.vue !== "calendrier";
+    document.getElementById("vue-contacts").hidden = etat.vue !== "contacts";
+    document.getElementById("vue-todo").hidden = etat.vue !== "todo";
+    var r = etat.actif ? redactions[etat.actif] : null;
+    // Message lu : visible si aucune rédaction active, ou si la rédaction active est la réponse en ligne à ce message.
+    lecture.style.display = (!r || (r.type === "reponse" && r.msg === etat.lu)) ? "" : "none";
+    Object.keys(redactions).forEach(function (id) { redactions[id].el.style.display = id === etat.actif ? "" : "none"; });
+    [].forEach.call(ongletsEl.children, function (t) { t.setAttribute("aria-selected", String(t.dataset.redaction === etat.actif)); });
+    rendreRuban();
+    fermerSuggestions();
+  }
+  function afficherMessage(i) {
+    etat.lu = i; etat.actif = null;
+    if (i == null) { lecture.innerHTML = '<div class="vide">Sélectionnez un élément à lire</div>'; rendre(); return; }
+    var m = MESSAGES[i];
+    lecture.innerHTML = '<h2 class="objet-lu"></h2><div class="de">De : <span class="nom"></span> <span class="adr"></span></div><div class="texte-lu" style="margin:8px 0"></div>' +
+      '<div><button type="button" aria-label="Répondre" data-action="repondre">Répondre</button> <button type="button" aria-label="Répondre à tous">Répondre à tous</button> <button type="button" aria-label="Transférer">Transférer</button></div>';
+    lecture.querySelector(".objet-lu").textContent = m.objet;
+    lecture.querySelector(".nom").textContent = m.de;
+    lecture.querySelector(".adr").textContent = "<" + m.adr + ">";
+    lecture.querySelector(".texte-lu").textContent = m.texte;
+    rendre();
+  }
+
+  // ------------------------------------------------------------ rédaction
+  function htmlRedaction(id, type, signature) {
+    return '<div class="barre-redaction" style="display:flex;gap:4px;margin-bottom:4px">' +
+      '<button type="button" id="splitButton-r' + id + '__primaryActionButton" aria-label="Envoyer" class="fui-Button fui-SplitButton__primaryActionButton" data-action="envoyer">Envoyer</button>' +
+      '<button type="button" aria-label="Autres options d\'envoi" class="fui-SplitButton__menuButton">⌄</button>' +
+      '<button type="button" aria-label="Réglez votre sensibilité">Sensibilité</button>' +
+      '<button type="button" aria-label="' + reglages.libelleAbandon + '" title="' + reglages.libelleAbandon + '" data-action="abandonner">' + reglages.libelleAbandon + '</button>' +
+      '<button type="button" aria-label="Isoler" title="Isoler">Isoler</button>' +
+      '</div>' +
+      '<div class="LCArn" role="group" id="MSG_' + id + '_TO"><button type="button" class="fui-Button" aria-roledescription="bouton, ouvre la boîte de dialogue Ajouter des destinataires">À</button>' +
+      '<div aria-label="À" tabindex="0" class="___h7sz9k0 EditorClass" spellcheck="false" contenteditable="true" id="to-' + id + '" data-zone="a-' + id + '" data-champ="dest"></div></div>' +
+      '<div class="LCArn" role="group" id="MSG_' + id + '_CC"><button type="button" class="fui-Button" aria-roledescription="bouton, ouvre la boîte de dialogue Ajouter des destinataires">Cc</button>' +
+      '<div aria-label="Cc" tabindex="0" class="EditorClass" spellcheck="false" contenteditable="true" id="cc-' + id + '" data-zone="cc-' + id + '" data-champ="dest"></div></div>' +
+      (type === "nouveau" ? '<span class="fui-Input"><input type="text" maxlength="255" autocomplete="off" spellcheck="true" placeholder="Ajouter un objet" aria-label="Objet" id="MSG_' + id + '_SUBJECT" class="fui-Input__input" data-zone="objet-' + id + '" style="width:100%"></span>' : "") +
+      '<div tabindex="0" dir="ltr" class="dFCbN customScrollBar" role="textbox" aria-multiline="true" aria-label="Corps du message" contenteditable="true" data-ms-editor="true" data-scrollable="true" data-zone="corps-' + id + '" style="min-height:90px;margin-top:4px">' +
+      '<div class="elementToProof"><br></div>' + (signature ? '<div id="Signature-' + id + '"><div class="elementToProof">Cordialement,<br>Testeur — Service communication</div></div>' : "") + "</div>";
+  }
+  function creerRedaction(type, proprietaire, msg) {
+    var id = "c" + (++seq);
+    var el = document.createElement("div");
+    el.className = "redaction"; el.dataset.redaction = id; el.dataset.proprietaire = proprietaire; el.dataset.type = type;
+    el.innerHTML = htmlRedaction(id, type, true);
+    var r = { id: id, el: el, type: type, proprietaire: proprietaire, msg: msg };
+    if (type === "reponse") {
+      var m = MESSAGES[msg];
+      r.objet = "RE: " + m.objet;
+      var cite = document.createElement("div");
+      cite.className = "citation"; cite.style.cssText = "color:#666;border-top:1px solid #ddd;margin-top:4px";
+      cite.textContent = "De : " + m.de + " — " + m.texte;
+      el.querySelector("[aria-label='Corps du message']").appendChild(cite);
+      pastille(el.querySelector("[aria-label='À']"), m.adr);
+    }
+    zoneRedactions.appendChild(el);
+    redactions[id] = r;
+    var t = document.createElement("button");
+    t.type = "button"; t.setAttribute("role", "tab"); t.dataset.redaction = id;
+    t.textContent = "Modification de " + (r.objet || "(Aucun objet)");
+    t.addEventListener("click", function () { etat.actif = id; if (r.type === "reponse") etat.lu = r.msg; rendre(); });
+    ongletsEl.appendChild(t);
+    brancherChamps(el);
+    var obj = el.querySelector("[aria-label='Objet']");
+    if (obj) obj.addEventListener("input", function () { t.textContent = "Modification de " + (obj.value || "(Aucun objet)"); });
+    etat.actif = id;
+    if (type === "reponse") etat.lu = msg;
+    rendre();
+    return id;
+  }
+  function fermerRedaction(id) {
+    var r = redactions[id]; if (!r) return;
+    r.el.remove(); delete redactions[id];
+    var t = ongletsEl.querySelector('[data-redaction="' + id + '"]'); if (t) t.remove();
+    if (etat.actif === id) {
+      var reste = Object.keys(redactions);
+      etat.actif = reglages.apresFermeture === "onglet-suivant" && reste.length ? reste[reste.length - 1] : null;
+    }
+    rendre();
+  }
+  function texteLibre(c) {
+    var out = "", w = document.createTreeWalker(c, 4);
+    for (var n = w.nextNode(); n; n = w.nextNode()) { if (n.parentElement && n.parentElement.closest("._EType_RECIPIENT_ENTITY")) continue; out += n.nodeValue; }
+    return out.replace(/​/g, "");
+  }
+  function pastilles(c) { return c ? [].map.call(c.querySelectorAll("._EType_RECIPIENT_ENTITY"), function (p) { return p.dataset.adresse; }) : []; }
+  var validations = (window.__validations = []); // chaque destinataire validé (pastille créée), même effacé ensuite
+  function pastille(c, adr) {
+    var nom = nomDe(adr);
+    validations.push({ zone: zoneDe(c), adresse: adr, t: Math.round(performance.now()) });
+    var p = document.createElement("span");
+    p.id = "REK0000" + (++compteurPastille).toString(16); p.className = "_Entity _EType_RECIPIENT_ENTITY _EReadonly_1 Lbs4W";
+    p.contentEditable = "false"; p.draggable = true; p.setAttribute("aria-label", "offline" + nom); p.dataset.adresse = adr;
+    p.innerHTML = '<span class="lpcWrapper"><span class="pill-222 validPill-223"></span><span id="presenceIcon" role="img" aria-label="offline"></span></span>';
+    p.querySelector(".pill-222").textContent = nom;
+    c.appendChild(p);
+    c.appendChild(document.createTextNode("​"));
+  }
+  function retirerTexteLibre(c) {
+    var w = document.createTreeWalker(c, 4), a = [];
+    for (var n = w.nextNode(); n; n = w.nextNode()) if (!(n.parentElement && n.parentElement.closest("._EType_RECIPIENT_ENTITY")) && n.nodeValue.replace(/​/g, "")) a.push(n);
+    a.forEach(function (n) { n.remove(); });
+  }
+  // Suggestions sous le champ destinataire (portail en fin de page).
+  var callout = null, calloutChamp = null, fermeture = null;
+  function fermerSuggestions() { if (callout) { callout.remove(); callout = null; calloutChamp = null; } }
+  function montrerSuggestions(c) {
+    var q = texteLibre(c).trim();
+    var res = chercher(q);
+    fermerSuggestions();
+    if (!q) return;
+    callout = document.createElement("div");
+    callout.className = "callout"; callout.setAttribute("role", "presentation");
+    var r = c.getBoundingClientRect();
+    callout.style.top = Math.round(r.bottom + 2) + "px"; callout.style.left = Math.round(r.left) + "px";
+    var lb = document.createElement("div"); lb.setAttribute("role", "listbox"); lb.setAttribute("aria-label", "Contacts suggérés"); lb.id = "suggestions";
+    res.forEach(function (x, i) {
+      var o = document.createElement("div"); o.setAttribute("role", "option"); o.id = "sugg-" + i; o.setAttribute("aria-selected", String(i === 0));
+      o.innerHTML = "<span class='n'></span><span class='m'></span>";
+      o.children[0].textContent = x[0]; o.children[1].textContent = x[1];
+      o.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      o.addEventListener("click", function () { retirerTexteLibre(c); pastille(c, x[1]); fermerSuggestions(); });
+      lb.appendChild(o);
+    });
+    if (!res.length) { var v = document.createElement("div"); v.textContent = "Aucune suggestion"; lb.appendChild(v); }
+    callout.appendChild(lb);
+    document.getElementById("portail").appendChild(callout);
+    calloutChamp = c;
+  }
+  function brancherDestinataire(c) {
+    // Variante plausible : un sélecteur de destinataires qui met le curseur en FIN de champ quand il prend le focus.
+    c.addEventListener("focus", function () {
+      if (!reglages.curseurFinAuFocus) return;
+      var r = document.createRange(); r.selectNodeContents(c); r.collapse(false);
+      var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    });
+    c.addEventListener("input", function () {
+      var t = texteLibre(c);
+      if (/[;,]/.test(t)) {
+        retirerTexteLibre(c);
+        t.split(/[;,]/).map(function (x) { return x.trim(); }).filter(Boolean).forEach(function (x) { pastille(c, x); });
+        fermerSuggestions(); return;
+      }
+      montrerSuggestions(c);
+    });
+    c.addEventListener("keydown", function (e) {
+      if ((e.key === "Enter" || e.key === "Tab") && callout && calloutChamp === c) {
+        var o = callout.querySelector("[role='option']");
+        if (o) { e.preventDefault(); retirerTexteLibre(c); pastille(c, o.children[1].textContent); fermerSuggestions(); }
+      }
+    });
+    c.addEventListener("paste", function (e) {
+      var t = e.clipboardData && e.clipboardData.getData("text/plain");
+      if (!t) return;
+      e.preventDefault();
+      t.split(/[;,]/).map(function (x) { return x.trim(); }).filter(Boolean).forEach(function (x) { pastille(c, x); });
+    });
+    c.addEventListener("focusout", function () { clearTimeout(fermeture); fermeture = setTimeout(function () { if (document.activeElement !== c && calloutChamp === c) fermerSuggestions(); }, 60); });
+  }
+  function brancherChamps(racine) {
+    [].forEach.call(racine.querySelectorAll("[data-champ='dest']"), brancherDestinataire);
+    var corps = racine.querySelector("[aria-label='Corps du message']");
+    if (corps) corps.addEventListener("paste", function (e) {
+      var h = e.clipboardData && e.clipboardData.getData("text/html");
+      if (!h) return;
+      e.preventDefault();
+      document.execCommand("insertHTML", false, h);
+    });
+  }
+  brancherDestinataire(document.getElementById("ev-participants"));
+
+  // ------------------------------------------------------------ clics
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("button,[role='option']");
+    if (!b || (b.closest && b.closest("[data-testid='ao-panel'],[data-pp-panneau]"))) return;
+    if (b.id === "nouveau-courrier") { creerRedaction("nouveau", e.isTrusted ? "utilisateur" : "extension"); return; }
+    if (b.dataset.vue) { etat.vue = b.dataset.vue; rendre(); return; }
+    if (b.parentElement === liste && b.dataset.msg != null) { afficherMessage(+b.dataset.msg); return; }
+    if (b.dataset.action === "repondre") { creerRedaction("reponse", e.isTrusted ? "utilisateur" : "extension", etat.lu); return; }
+    var red = b.closest(".redaction");
+    if (red && b.dataset.action === "envoyer") {
+      var id = red.dataset.redaction, r = redactions[id];
+      var a = pastilles(red.querySelector("[aria-label='À']")), cc = pastilles(red.querySelector("[aria-label='Cc']"));
+      if (!a.length && !cc.length) return; // comme Outlook : au moins un destinataire
+      var obj = red.querySelector("[aria-label='Objet']");
+      envoyes.push({ id: id, proprietaire: r.proprietaire, type: r.type, a: a, cc: cc, objet: obj ? obj.value : r.objet,
+        corps: red.querySelector("[aria-label='Corps du message']").innerText, clicConfiance: e.isTrusted });
+      publier();
+      fermerRedaction(id);
+      return;
+    }
+    if (red && b.dataset.action === "abandonner") { fermerRedaction(red.dataset.redaction); return; }
+    if (b.id === "btn-teams") { document.getElementById("teams").hidden = !document.getElementById("teams").hidden; return; }
+    if (b.id === "teams-envoyer") { envoyerTeams(e.isTrusted); return; }
+    if (b.getAttribute("aria-label") === "Importance élevée") { b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true")); return; }
+    if (b.id === "nouvel-evenement") { document.getElementById("evenement").hidden = false; return; }
+    if (b.id === "nouveau-contact") { document.getElementById("fiche-contact").hidden = false; return; }
+    if (b.id === "btn-parametres") { ouvrirParametres(); return; }
+  });
+  function envoyerTeams(confiance) {
+    var s = document.getElementById("teams-saisie"), t = s.innerText.trim();
+    if (!t) return;
+    teamsEnvoyes.push({ texte: t, confiance: confiance });
+    s.innerHTML = "";
+  }
+  document.getElementById("teams-saisie").addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyerTeams(e.isTrusted); } });
+  // Recherche : Entrée affiche les résultats (aperçus avec adresses).
+  var recherche = document.getElementById("recherche"), resultats = document.getElementById("resultats");
+  recherche.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    resultats.hidden = false; liste.hidden = true;
+    resultats.innerHTML = "";
+    MESSAGES.forEach(function (m, i) {
+      var o = document.createElement("div"); o.setAttribute("role", "option"); o.dataset.msg = String(i);
+      o.innerHTML = "<b></b><div></div><div class='apercu'></div>";
+      o.children[0].textContent = m.de; o.children[1].textContent = m.objet; o.children[2].textContent = m.texte.slice(0, 60);
+      resultats.appendChild(o);
+    });
+  });
+  function ouvrirParametres() {
+    var fond = document.createElement("div"); fond.className = "ms-Overlay ms-Overlay--dark modal-fond";
+    var d = document.createElement("div");
+    d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-label", "Paramètres"); d.className = "ms-Modal is-open ms-Dialog"; d.id = "parametres";
+    d.innerHTML = '<input type="text" aria-label="Rechercher dans les paramètres" data-zone="param-recherche" id="param-recherche">' +
+      '<h3>Signatures électroniques</h3><div role="textbox" contenteditable="true" aria-multiline="true" aria-label="Signature électronique" id="param-signature" data-zone="param-signature">Cordialement,<br>Testeur — Service communication</div>' +
+      '<button type="button" aria-label="Enregistrer">Enregistrer</button> <button type="button" aria-label="Fermer" id="param-fermer">Fermer</button>';
+    document.getElementById("portail").appendChild(fond); document.getElementById("portail").appendChild(d);
+    d.querySelector("#param-fermer").addEventListener("click", function () { d.remove(); fond.remove(); });
+  }
+
+  // ------------------------------------------------------------ pièges (déclencheurs déterministes)
+  // Une action « de l'utilisateur » ou d'Outlook, déclenchée à un instant précis
+  // de l'activité de l'extension (événement NON fiable = geste de l'extension).
+  var pieges = [];
+  // Geste de l'extension : événement synthétique, ou « input » attribué à un geste synthétique (voir marquer()).
+  function gesteExtension(type, e) {
+    if (type === "input") return (origine || (e.isTrusted ? "inconnue" : "extension")) !== "utilisateur";
+    return !e.isTrusted;
+  }
+  function surEvenement(type, e) {
+    if (!gesteExtension(type, e)) return;
+    var z = zoneDe(e.target);
+    pieges.slice().forEach(function (p) {
+      if (p.type !== type) return;
+      if (p.zone && !(p.zone instanceof RegExp ? p.zone.test(z) : z === p.zone)) return;
+      if (p.cle && e.key !== p.cle) return;
+      if (p.si && !p.si(e)) return;
+      p.vus = (p.vus || 0) + 1;
+      if (p.vus < (p.apres || 1)) return;
+      pieges.splice(pieges.indexOf(p), 1);
+      if (p.synchrone) p.action(e); else setTimeout(function () { p.action(e); }, 0);
+    });
+  }
+  ["keydown", "input", "paste", "mousedown", "click"].forEach(function (t) { document.addEventListener(t, function (e) { surEvenement(t, e); }, true); });
+
+  function curseurFin(el) {
+    el.focus();
+    if (el.tagName === "INPUT") { try { el.selectionStart = el.selectionEnd = el.value.length; } catch (e) {} return; }
+    var r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+    var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  }
+  function notifier(mode) {
+    var t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "alert"); t.id = "toast";
+    t.innerHTML = '<b>Claire Petit</b> : tu es dispo ? ' + (mode === "saisie" ? '<input type="text" aria-label="Réponse rapide" data-zone="toast-reponse" id="toast-reponse">' : "") +
+      ' <button type="button" aria-label="Afficher" id="toast-afficher" data-zone="toast-bouton">Afficher</button>';
+    document.getElementById("portail").appendChild(t);
+    (mode === "saisie" ? t.querySelector("input") : t.querySelector("button")).focus();
+    return t;
+  }
+
+  // ------------------------------------------------------------ pilotage (tests)
+  function trouver(id) { return redactions[id] ? redactions[id].el : null; }
+  // Texte d'un éditeur, indépendant de l'affichage (innerText d'un élément masqué perd les sauts de ligne) :
+  // un bloc par ligne, espaces normalisés.
+  function blocs(el) {
+    var out = [], w = document.createTreeWalker(el, 4);
+    for (var n = w.nextNode(); n; n = w.nextNode()) { var t = n.nodeValue.replace(/[\s\u00a0\u200B]+/g, " ").trim(); if (t) out.push(t); }
+    return out.join(" | ");
+  }
+  window.ow = {
+    reglages: reglages,
+    afficherMessage: afficherMessage,
+    nouvelleRedaction: function (proprietaire) { return creerRedaction("nouveau", proprietaire || "utilisateur"); },
+    repondre: function (msg, proprietaire) { afficherMessage(msg); return creerRedaction("reponse", proprietaire || "utilisateur", msg); },
+    fermer: fermerRedaction,
+    activer: function (id) { etat.actif = id; var r = redactions[id]; if (r && r.type === "reponse") etat.lu = r.msg; rendre(); },
+    vue: function (v) { etat.vue = v; rendre(); },
+    ajouterPastille: function (id, champ, adr) { pastille(trouver(id).querySelector("[aria-label='" + (champ || "À") + "']"), adr); },
+    ecrireCorps: function (id, texte) {
+      var c = trouver(id).querySelector("[aria-label='Corps du message']");
+      var p = c.querySelector(".elementToProof"); p.textContent = texte;
+    },
+    ecrireObjet: function (id, texte) { trouver(id).querySelector("[aria-label='Objet']").value = texte; },
+    curseurFin: function (sel) { curseurFin(document.querySelector(sel)); },
+    // Remplace le champ « À » par un NOUVEL élément (re-rendu React), contenu recopié.
+    rerendreA: function (id) {
+      var el = trouver(id), a = el.querySelector("[aria-label='À']");
+      var n = a.cloneNode(true); n.id = a.id + "-bis";
+      a.replaceWith(n); brancherDestinataire(n); fermerSuggestions();
+      return n.id;
+    },
+    piege: function (p) { pieges.push(p); },
+    // Variante plausible : zone de saisie Teams sans aria-multiline (on ne connaît pas son balisage réel).
+    teamsSansMultiligne: function () { document.getElementById("teams-saisie").removeAttribute("aria-multiline"); },
+    pieges: pieges,
+    notifier: notifier,
+    ouvrirParametres: ouvrirParametres,
+    etat: function () {
+      var out = { vue: etat.vue, actif: etat.actif, lu: etat.lu, redactions: [] };
+      Object.keys(redactions).forEach(function (id) {
+        var el = redactions[id].el, a = el.querySelector("[aria-label='À']"), cc = el.querySelector("[aria-label='Cc']"), o = el.querySelector("[aria-label='Objet']");
+        var corps = el.querySelector("[aria-label='Corps du message']");
+        out.redactions.push({ id: id, proprietaire: redactions[id].proprietaire, type: redactions[id].type, visible: el.style.display !== "none",
+          a: pastilles(a), aTexte: texteLibre(a), cc: pastilles(cc), ccTexte: texteLibre(cc), objet: o ? o.value : null, corps: blocs(corps) });
+      });
+      out.recherche = recherche.value;
+      out.teams = document.getElementById("teams-saisie").innerText;
+      out.teamsEnvoyes = teamsEnvoyes.slice();
+      out.cal = { titre: document.getElementById("ev-titre").value, participants: pastilles(document.getElementById("ev-participants")),
+        participantsTexte: texteLibre(document.getElementById("ev-participants")), description: document.getElementById("ev-description").innerText };
+      out.contact = { prenom: document.getElementById("ct-prenom").value, nom: document.getElementById("ct-nom").value, mail: document.getElementById("ct-mail").value };
+      var sig = document.getElementById("param-signature"); out.signature = sig ? sig.innerText : null;
+      var tr = document.getElementById("toast-reponse"); out.toast = tr ? tr.value : null;
+      out.actifZone = zoneDe(document.activeElement);
+      out.envoyes = envoyes.slice();
+      return out;
+    }
+  };
+  afficherMessage(0);
+  document.documentElement.dataset.fauxPret = "1";
+})();
+</script>
+</body>
+</html>

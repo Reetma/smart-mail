@@ -1,0 +1,44 @@
+<!doctype html>
+<html data-ao-source="gmail">
+<head><meta charset="utf-8"><title>Faux Gmail</title></head>
+<body>
+  <h1>Faux Gmail (test)</h1>
+  <div role="dialog">
+    <div name="to"><input peoplekit-id="pk1" aria-label="To recipients" aria-controls="ao-lb" autocomplete="off"></div>
+    <div role="listbox" id="ao-lb"></div>
+  </div>
+  <script type="module">
+    import { ask } from "./book.js";
+    const input = document.querySelector('div[name="to"] input');
+    const lb = document.getElementById("ao-lb");
+    const typed = (window.__typed = []);
+    let seg = "";
+    function render(v) {
+      const list = v ? ask(v) : [];
+      lb.innerHTML = "";
+      for (const c of list) {
+        const opt = document.createElement("div"); opt.setAttribute("role", "option");
+        const n = document.createElement("span"); n.textContent = c.name;
+        const m = document.createElement("span"); m.setAttribute("data-hovercard-id", c.mail); m.textContent = c.mail;
+        opt.appendChild(n); opt.appendChild(m); lb.appendChild(opt);
+      }
+    }
+    input.addEventListener("input", () => {
+      const v = input.value;
+      if (v === "") { if (seg) { typed.push(seg); seg = ""; } }
+      else if (v.length >= seg.length) seg = v;
+      render(v);
+    });
+    window.__keys = [];
+    input.addEventListener("keydown", (e) => window.__keys.push(e.key));
+    document.addEventListener("ao-run-begin", () => { typed.length = 0; window.__keys.length = 0; seg = ""; });
+    document.addEventListener("ao-make-chip", () => {
+      const to = document.querySelector('div[name="to"]');
+      const chip = document.createElement("span");
+      chip.setAttribute("data-hovercard-id", "accident@gmail.com");
+      chip.textContent = "accident@gmail.com";
+      to.appendChild(chip);
+    });
+  </script>
+</body>
+</html>

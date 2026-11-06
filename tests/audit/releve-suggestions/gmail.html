@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Boîte de réception - Gmail</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 Roboto, Arial, sans-serif; background: #f6f8fc; }
+  header { position: absolute; left: 0; right: 0; top: 0; height: 64px; display: flex; align-items: center; padding: 0 16px; }
+  header form input { width: 600px; height: 44px; margin-left: 220px; border-radius: 22px; border: 0; background: #e9eef6; padding: 0 16px; }
+  #nav { position: absolute; left: 0; top: 64px; width: 256px; bottom: 0; padding: 8px; }
+  #main { position: absolute; left: 256px; right: 16px; top: 64px; bottom: 0; background: #fff; border-radius: 16px; overflow: auto; padding: 16px 24px; }
+  table.boite { width: 100%; border-collapse: collapse; } table.boite td { padding: 6px; border-bottom: 1px solid #eee; }
+  .lettre { width: 640px; margin: 20px auto; text-align: center; }
+  .lettre a.bouton { display: inline-block; padding: 10px 22px; background: #1a73e8; color: #fff; text-decoration: none; border-radius: 4px; }
+  .compose { background: #fff; box-shadow: 0 8px 10px 1px rgba(0,0,0,.14), 0 3px 14px 2px rgba(0,0,0,.12); border-radius: 8px 8px 0 0; display: flex; flex-direction: column; }
+  .compose.fenetre { position: fixed; right: 16px; bottom: 0; width: 540px; height: 560px; z-index: 900; }
+  .compose.plein-ecran { position: fixed; left: 80px; right: 80px; top: 40px; bottom: 40px; z-index: 900; border-radius: 8px; }
+  .compose.en-ligne { position: relative; margin: 24px 0 0 56px; height: 360px; box-shadow: 0 1px 3px rgba(0,0,0,.3); border-radius: 8px; }
+  #voile { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 899; }
+  .titre { height: 40px; background: #f2f6fc; padding: 10px 16px; font-weight: 500; border-radius: 8px 8px 0 0; }
+  .ligne-dest { display: flex; align-items: center; gap: 6px; padding: 4px 16px; border-bottom: 1px solid #f1f3f4; min-height: 36px; position: relative; }
+  .dest { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: center; }
+  .dest input { flex: 1; min-width: 60px; border: 0; outline: none; height: 26px; font: inherit; }
+  .afV { background: #e8eaed; border-radius: 12px; padding: 0 8px; }
+  .sujet { margin: 0 16px; border: 0; border-bottom: 1px solid #f1f3f4; height: 36px; font: inherit; outline: none; }
+  .corps { flex: 1; padding: 12px 16px; outline: none; overflow: auto; }
+  .pied { padding: 8px 16px; }
+  .sugg { position: absolute; z-index: 1000; width: 420px; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.3); border-radius: 4px; padding: 6px 0; }
+  .sugg [role="option"] { display: flex; gap: 10px; align-items: center; padding: 6px 14px; cursor: pointer; }
+  .sugg .av { width: 32px; height: 32px; border-radius: 50%; background: #c2e7ff; display: grid; place-items: center; font-size: 12px; }
+  .sugg .mail { color: #5f6368; font-size: 12px; }
+  .live { position: absolute; left: -10000px; top: 0; width: 1px; height: 1px; overflow: hidden; }
+</style>
+</head>
+<body>
+  <header role="banner"><form role="search"><input aria-label="Rechercher dans les messages" id="recherche" autocomplete="off"></form></header>
+  <div id="nav" role="navigation"><div role="button" gh="cm" aria-label="Nouveau message" id="nouveau">Nouveau message</div><div>Boîte de réception</div><div>Plus</div></div>
+  <div id="main" role="main"></div>
+
+<script type="module">
+import { ask, tokens, PETIT, AVEC_GROUPES } from "./carnet.js";
+
+const P = new URLSearchParams(location.search);
+const CFG = Object.assign({
+  carnet: "PETIT", contacts: null, cap: 6,
+  redaction: "fenetre",           // fenetre | plein-ecran | en-ligne | absente
+  vue: "boite",                    // boite | message (lettre d'information ouverte derrière)
+  liens: ["Voir plus"],            // textes des liens de la lettre (vue message)
+  libelleA: "À",                   // libellé du champ (« À », « Destinataires », « To recipients »)
+  ariaControls: true,              // le champ pointe sa liste (aria-controls)
+  portail: true,                   // liste au bout du <body> (sinon dans la fenêtre de rédaction)
+  hovercard: "enfant",             // option | enfant | aucun (data-hovercard-id porteur de l'adresse)
+  surligner: false, delai: 0, live: true,
+}, JSON.parse(P.get("cfg") || "{}"));
+const BOOK = CFG.contacts || (CFG.carnet === "AVEC_GROUPES" ? AVEC_GROUPES : PETIT);
+
+const typed = (window.__typed = []);
+window.__keys = [];
+const V = (window.__violations = []);
+window.__rendus = [];
+let seg = "";
+function track(v) { if (v === "") { if (seg) { typed.push(seg); seg = ""; } } else if (v.length >= seg.length) seg = v; }
+document.addEventListener("ao-run-begin", () => { typed.length = 0; window.__keys.length = 0; seg = ""; });
+document.getElementById("recherche").addEventListener("input", () => V.push("saisie-ailleurs:recherche"));
+
+// ------------------------------------------------------------ vue principale
+const main = document.getElementById("main");
+if (CFG.vue === "message") {
+  main.innerHTML = `<h2>Les nouveautés de la semaine</h2><div><b>Lettre d'information</b> &lt;news@lettre-test.example&gt;</div>
+    <div class="lettre"><p>Découvrez nos offres du moment.</p><div style="height:180px;background:#eef"></div><p id="liens"></p><p>Pour vous désabonner, cliquez ici.</p></div>`;
+  const zone = main.querySelector("#liens");
+  for (const t of CFG.liens) {
+    const a = document.createElement("a"); a.className = "bouton"; a.href = "https://lettre-test.example/offres"; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = t;
+    a.addEventListener("click", (e) => { e.preventDefault(); V.push("clic-lien-email:" + t); });
+    zone.appendChild(a); zone.appendChild(document.createTextNode(" "));
+  }
+} else {
+  main.innerHTML = `<table class="boite" role="grid"><tbody>
+    <tr role="row"><td>Apple</td><td>Vous n'obtenez pas souvent d'e-mail à partir de noreply@apple-test.example</td></tr>
+    <tr role="row"><td>Scolarité</td><td>Écrire à scolarite.inscriptions@ecole-test.fr</td></tr></tbody></table>`;
+}
+
+// ------------------------------------------------------------ rédaction
+let champ = null, corps = null, sujet = null, dest = null;
+function construire() {
+  const r = document.createElement("div");
+  r.className = "compose " + CFG.redaction;
+  if (CFG.redaction !== "en-ligne") { r.setAttribute("role", "dialog"); r.setAttribute("aria-label", "Nouveau message"); }
+  if (CFG.redaction === "plein-ecran") { r.setAttribute("aria-modal", "true"); const v = document.createElement("div"); v.id = "voile"; document.body.appendChild(v); }
+  r.innerHTML = `
+    ${CFG.redaction === "en-ligne" ? "" : '<div class="titre">Nouveau message</div>'}
+    <div class="ligne-dest"><span>À</span><div name="to" class="dest"><input class="agP aFw" peoplekit-id="BbVjBd" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-label="${CFG.libelleA}" spellcheck="false" autocomplete="off" id="champ-to"></div></div>
+    <input name="subjectbox" class="aoT sujet" placeholder="Objet" aria-label="Objet" id="sujet">
+    <div class="Am aiL Al editable LW-avf corps" aria-label="Corps du message" role="textbox" aria-multiline="true" contenteditable="true" g_editable="true" id="corps"><div>Bonjour,</div><div>Texte de l'utilisateur à ne pas toucher.</div></div>
+    <div class="pied"><div role="button" aria-label="Envoyer ‪(Ctrl-Entrée)‬" id="envoyer">Envoyer</div></div>`;
+  if (CFG.redaction === "en-ligne") main.appendChild(r); else document.body.appendChild(r);
+  champ = r.querySelector("#champ-to"); corps = r.querySelector("#corps"); sujet = r.querySelector("#sujet"); dest = r.querySelector('div[name="to"]');
+  if (CFG.ariaControls) champ.setAttribute("aria-controls", "liste-sugg");
+  for (const [el, nom] of [[corps, "corps"], [sujet, "objet"]]) {
+    el.addEventListener("input", () => V.push("saisie-ailleurs:" + nom));
+    el.addEventListener("keydown", (e) => V.push("touche-ailleurs:" + nom + ":" + e.key));
+  }
+  r.querySelector("#envoyer").addEventListener("click", () => V.push("envoi:clic-envoyer"));
+  champ.addEventListener("input", () => {
+    const q = champ.value.trim();
+    track(q);
+    const g = ++gen;
+    if (!q) { fermer(); return; }
+    const go = () => { if (g === gen) ouvrir(q); };
+    if (CFG.delai) setTimeout(go, CFG.delai); else go();
+  });
+  champ.addEventListener("keydown", (e) => {
+    window.__keys.push(e.key);
+    if (["Enter", "Tab", ",", ";"].includes(e.key) && champ.value.trim()) { V.push("validation:touche:" + e.key); e.preventDefault(); puce(res[0] || { nom: champ.value, mail: champ.value }); }
+    // Gmail : Retour arrière dans un champ vide supprime la dernière pastille.
+    if (e.key === "Backspace" && champ.value === "") { const d = dest.querySelectorAll(".afV"); if (d.length) { V.push("pastille-supprimee"); d[d.length - 1].remove(); } }
+  });
+  // Gmail transforme le texte laissé dans « À » en pastille quand le champ perd le focus.
+  champ.addEventListener("blur", () => { if (champ.value.trim()) { V.push("validation:perte-focus:" + champ.value.trim()); puce({ nom: champ.value.trim(), mail: champ.value.trim() }); } });
+}
+if (CFG.redaction !== "absente") construire();
+document.getElementById("nouveau").addEventListener("click", () => { if (!champ) construire(); });
+
+function puce(c) {
+  const d = document.createElement("div"); d.className = "afV"; d.setAttribute("data-hovercard-id", c.mail); d.setAttribute("data-name", c.nom); d.textContent = c.nom;
+  dest.insertBefore(d, champ); champ.value = ""; fermer();
+}
+
+// ------------------------------------------------------------ suggestions
+let gen = 0, res = [], liste = null, live = null;
+function fermer() { if (liste) { liste.remove(); liste = null; } if (live) { live.remove(); live = null; } champ && champ.setAttribute("aria-expanded", "false"); }
+function surligne(texte, q) {
+  const frag = document.createDocumentFragment();
+  if (!CFG.surligner) { frag.appendChild(document.createTextNode(texte)); return frag; }
+  const mots = tokens(q), bas = texte.toLowerCase();
+  let i = 0;
+  while (i < texte.length) {
+    const debutMot = i === 0 || !/[a-z0-9]/i.test(texte[i - 1]);
+    const m = debutMot ? mots.find((w) => bas.startsWith(w, i)) : null;
+    if (m) { const b = document.createElement("b"); b.textContent = texte.slice(i, i + m.length); frag.appendChild(b); i += m.length; }
+    else { let j = i + 1; while (j < texte.length && !(!/[a-z0-9]/i.test(texte[j - 1]) && mots.some((w) => bas.startsWith(w, j)))) j++; frag.appendChild(document.createTextNode(texte.slice(i, j))); i = j; }
+  }
+  return frag;
+}
+function ouvrir(q) {
+  res = ask(BOOK, q).slice(0, CFG.cap);
+  window.__rendus.push([q, res.length]);
+  if (!liste) {
+    liste = document.createElement("div"); liste.className = "sugg"; liste.setAttribute("role", "listbox"); liste.id = "liste-sugg";
+    if (CFG.portail) document.body.appendChild(liste); else champ.closest(".ligne-dest").appendChild(liste);
+  }
+  liste.innerHTML = "";
+  res.forEach((c, i) => {
+    const o = document.createElement("div"); o.setAttribute("role", "option"); o.id = "opt-" + i;
+    if (CFG.hovercard === "option") o.setAttribute("data-hovercard-id", c.mail);
+    const av = document.createElement("div"); av.className = "av"; av.textContent = tokens(c.nom).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+    const txt = document.createElement("div");
+    const n = document.createElement("div"); n.className = "nom"; n.appendChild(surligne(c.nom, q));
+    const m = document.createElement("div"); m.className = "mail"; m.appendChild(surligne(c.mail, q));
+    if (CFG.hovercard === "enfant") m.setAttribute("data-hovercard-id", c.mail);
+    txt.appendChild(n); txt.appendChild(m); o.appendChild(av); o.appendChild(txt);
+    const vise = (e) => { V.push("validation:" + e.type + ":" + c.mail); e.preventDefault(); puce(c); };
+    o.addEventListener("mousedown", vise); o.addEventListener("click", vise);
+    liste.appendChild(o);
+  });
+  if (CFG.portail) { const r = champ.getBoundingClientRect(); liste.style.left = (r.left + scrollX) + "px"; liste.style.top = (r.bottom + scrollY + 2) + "px"; }
+  else { liste.style.left = "40px"; liste.style.top = "100%"; }
+  champ.setAttribute("aria-expanded", "true");
+  if (CFG.live) {
+    // Région annoncée aux lecteurs d'écran : toutes les suggestions recollées.
+    if (!live) { live = document.createElement("div"); live.className = "live"; live.setAttribute("aria-live", "polite"); document.body.appendChild(live); }
+    live.textContent = res.map((c) => c.nom + c.mail).join("");
+  }
+}
+</script>
+</body>
+</html>

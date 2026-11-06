@@ -1,0 +1,63 @@
+<!doctype html>
+<html data-ao-source="outlook">
+<head><meta charset="utf-8"><title>Faux Outlook web</title></head>
+<body>
+  <h1>Faux Outlook web (test)</h1>
+
+  <!-- Barre de recherche : des résultats SANS adresse. Taper ici ne doit JAMAIS armer. -->
+  <div role="search">
+    <label>Rechercher <input aria-label="Rechercher" aria-controls="ao-search-lb" autocomplete="off"></label>
+    <div role="listbox" id="ao-search-lb"></div>
+  </div>
+
+  <div role="dialog" aria-label="Nouveau message">
+    <label>À <input aria-label="To" aria-controls="ao-lb" autocomplete="off"></label>
+    <div role="listbox" id="ao-lb"></div>
+    <label>Cc <input aria-label="Cc" aria-controls="ao-cc-lb" autocomplete="off"></label>
+    <div role="listbox" id="ao-cc-lb"></div>
+  </div>
+
+  <script type="module">
+    import { ask } from "./book.js";
+    const typed = (window.__typed = []);
+    window.__keys = [];
+    let seg = "";
+    function renderList(lb, list) {
+      lb.innerHTML = "";
+      for (const c of list) {
+        const opt = document.createElement("div"); opt.setAttribute("role", "option");
+        const n = document.createElement("span"); n.className = "ms-Persona-primaryText"; n.textContent = c.name;
+        const m = document.createElement("span"); m.className = "ms-Persona-secondaryText"; m.textContent = c.mail;
+        opt.appendChild(n); opt.appendChild(m); lb.appendChild(opt);
+      }
+    }
+    // On note la recherche complète : le plus long texte atteint entre deux retours à vide.
+    function track(v) { if (v === "") { if (seg) { typed.push(seg); seg = ""; } } else if (v.length >= seg.length) seg = v; }
+    function wireRecipient(input, lb) {
+      input.addEventListener("input", () => { track(input.value); renderList(lb, input.value ? ask(input.value) : []); });
+      input.addEventListener("keydown", (e) => window.__keys.push(e.key));
+    }
+    wireRecipient(document.querySelector('input[aria-label="To"]'), document.getElementById("ao-lb"));
+    wireRecipient(document.querySelector('input[aria-label="Cc"]'), document.getElementById("ao-cc-lb"));
+
+    // Barre de recherche : résultats sans adresse (dossiers).
+    const sIn = document.querySelector('input[aria-label="Rechercher"]'), sLb = document.getElementById("ao-search-lb");
+    sIn.addEventListener("input", () => {
+      sLb.innerHTML = "";
+      if (sIn.value) ["Boîte de réception", "Éléments envoyés", "Archive"].forEach((t) => { const o = document.createElement("div"); o.setAttribute("role", "option"); o.textContent = t; sLb.appendChild(o); });
+    });
+
+    // Le moteur démarre : on ne compte QUE ses recherches (pas la lettre d'armement).
+    document.addEventListener("ao-run-begin", () => { typed.length = 0; window.__keys.length = 0; seg = ""; });
+    // Simule une pastille destinataire validée par erreur (hors de la liste de suggestions).
+    document.addEventListener("ao-make-chip", () => {
+      const dlg = document.querySelector('[role="dialog"]');
+      const chip = document.createElement("div");
+      chip.setAttribute("role", "listitem");
+      chip.setAttribute("data-hovercard-id", "accident@essca.fr");
+      chip.textContent = "accident@essca.fr";
+      dlg.insertBefore(chip, dlg.firstChild);
+    });
+  </script>
+</body>
+</html>

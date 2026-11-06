@@ -1,0 +1,30 @@
+{
+  "name": "Smart Mail",
+  "short_name": "Smart Mail",
+  "description": "Identifiez les étudiants de votre établissement et envoyez-leur un message depuis votre adresse.",
+  "lang": "fr",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F7F8",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    {
+      "src": "/icones/icone-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icones/icone-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icones/icone-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

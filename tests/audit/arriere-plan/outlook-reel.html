@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="fr" dir="ltr"<!--ATTR-->>
+<head>
+<meta charset="utf-8">
+<title>Courrier - Outlook</title>
+<!--CONFIG-->
+<style>
+  body { font-family: "Segoe UI", sans-serif; margin: 0; font-size: 14px; }
+  #entete { display: flex; gap: 8px; padding: 6px 10px; background: #0f6cbd; align-items: center; }
+  #entete input { width: 420px; }
+  #ruban-onglets, #ruban { display: flex; gap: 4px; padding: 4px 10px; border-bottom: 1px solid #ddd; }
+  #app { display: flex; }
+  nav { width: 140px; display: flex; flex-direction: column; }
+  #liste { width: 300px; border-right: 1px solid #ddd; }
+  #liste [role="option"] { padding: 6px; border-bottom: 1px solid #eee; }
+  #lecture { flex: 1; min-width: 640px; padding: 8px; }
+  .barre-redaction { display: flex; gap: 6px; margin-bottom: 6px; }
+  .LCArn { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #ddd; padding: 4px 0; }
+  .EditorClass, [aria-label="Cc"][contenteditable], [aria-label="Cci"][contenteditable] { min-height: 22px; min-width: 380px; outline: 1px solid #eee; padding: 2px; }
+  ._Entity { background: #e8f0fa; border-radius: 8px; padding: 0 6px; margin-right: 4px; }
+  .dFCbN { min-height: 160px; border: 1px solid #eee; padding: 6px; margin-top: 6px; }
+  #callout { position: fixed; background: #fff; border: 1px solid #ccc; width: 360px; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+  #callout [role="option"] { padding: 4px 6px; }
+</style>
+</head>
+<body>
+<div id="entete" role="banner">
+  <input role="combobox" type="text" id="recherche" aria-label="Recherchez des e-mails, des réunions, des fichiers et plus encore." placeholder="Rechercher" autocomplete="off">
+  <button type="button" aria-label="Conversation Teams">Teams</button>
+  <button type="button" aria-label="Ma journée">Ma journée</button>
+  <button type="button" aria-label="Notifications">Notifications</button>
+  <button type="button" aria-label="Paramètres">Paramètres</button>
+</div>
+<div role="tablist" id="ruban-onglets" aria-label="Onglets du ruban">
+  <button type="button" role="tab" aria-selected="true" id="onglet-accueil">Accueil</button>
+  <button type="button" role="tab" aria-selected="false">Afficher</button>
+  <button type="button" role="tab" aria-selected="false">Aide</button>
+</div>
+<div id="ruban" role="toolbar" aria-label="Accueil">
+  <button type="button" id="nouveau" class="fui-Button" aria-label="Nouveau message">Nouveau message</button>
+  <button type="button" aria-label="Supprimer">Supprimer</button>
+  <button type="button" aria-label="Archiver">Archiver</button>
+  <button type="button" aria-label="Répondre">Répondre</button>
+</div>
+<div id="app">
+  <nav aria-label="Volet de navigation">
+    <button type="button">Courrier</button><button type="button">Calendrier</button><button type="button">Contacts</button><button type="button">To Do</button>
+  </nav>
+  <div id="liste" role="listbox" aria-label="Liste des messages">
+    <div role="option" aria-selected="false">iCloud — Vous n'obtenez pas souvent d'e-mail à partir de noreply@email.apple.com <button type="button" aria-label="Marquer comme non lu">✉</button></div>
+    <div role="option" aria-selected="false">Microsoft Learn — learn@mails.microsoft.com <button type="button" aria-label="Marquer comme non lu">✉</button></div>
+    <div role="option" aria-selected="false">Scolarité — Envoyer vos documents avant vendredi <button type="button" aria-label="Marquer comme non lu">✉</button></div>
+  </div>
+  <div id="lecture"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  // Fausse page du NOUVEL Outlook web (outlook.office.com / outlook.cloud.microsoft),
+  // interface française, structure relevée sur un vrai poste (voir la fiche de
+  // référence) : champ « À » contenteditable aria-label="À", pastilles
+  // _EType_RECIPIENT_ENTITY qui montrent le NOM, objet aria-label="Objet", corps
+  // role=textbox aria-label="Corps du message", bouton « Envoyer » (split button),
+  // « Abandonner », ruban avec onglets. L'envoi part en requête réseau
+  // (/owa/service.svc?action=SendItem) que le banc enregistre côté Node : le
+  // journal des envois survit aux rechargements, à la fermeture du navigateur.
+  var CFG = Object.assign({
+    suggestions: "sync",   // relevé : "sync" | "debounce" (minuterie 150 ms) | "raf-position" (callout opacité 0 jusqu'à l'image suivante, comme Fluent v8)
+    pastille: "sync",      // "sync" | "message" (rendu différé type React/MessageChannel) | "timeout" (minuterie 50 ms)
+    redactionRaf: false,   // variante : la rédaction n'apparaît qu'à l'image suivante (requestAnimationFrame)
+    recharger: null,       // "apres-a" | "apres-corps" | "survol-envoyer" | "apres-envoi" : la page se recharge à cette étape (une fois)
+    autoRecharge: 0,       // ms : Outlook se recharge tout seul après le 1er envoi (une fois)
+    redirection: 0,        // ms : après le 1er envoi, session expirée → page de connexion (une fois)
+    restaurerBrouillon: false, // après rechargement, Outlook rouvre le brouillon en cours (variante plausible)
+    bloque: false,         // « Envoyer » ne fait rien
+    fermetureLente: 0      // ms : la rédaction ne se referme qu'après ce délai (minuterie de la page)
+  }, window.__CFG || {});
+
+  var ONGLET = sessionStorage.getItem("onglet");
+  if (!ONGLET) { ONGLET = "o" + Array.from(crypto.getRandomValues(new Uint8Array(5)), function (x) { return x.toString(16).padStart(2, "0"); }).join(""); sessionStorage.setItem("onglet", ONGLET); }
+  document.documentElement.dataset.onglet = ONGLET;
+
+  function evt(type, data) {
+    try { fetch("/__evt", { method: "POST", body: JSON.stringify(Object.assign({ type: type, onglet: ONGLET }, data || {})), keepalive: true }).catch(function () {}); } catch (e) {}
+  }
+  function unefois(cle) { var k = "fait-" + cle; if (sessionStorage.getItem(k)) return false; sessionStorage.setItem(k, "1"); return true; }
+  // Rechargement : l'ancienne page devient inerte (« Envoyer » n'envoie plus) dès que le
+  // rechargement est lancé, pour que l'étape visée soit exactement celle interrompue
+  // (sinon, sur une machine chargée, l'extension irait cliquer dans la page sortante).
+  function recharger(etape) { window.__dechargement = true; evt("recharge", { etape: etape }); location.reload(); }
+  window.__chargements = Number(sessionStorage.getItem("chargements") || 0) + 1;
+  sessionStorage.setItem("chargements", String(window.__chargements));
+  evt("chargement", { n: window.__chargements });
+
+  // Carnet (même que tests/fausse-adresses/book.js), 5 suggestions au plus.
+  var CAP = 5;
+  var BOOK = [
+    ["Martin Dupont", "martin.dupont@essca.fr", 90], ["Marie Martin", "marie.martin@essca.fr", 89], ["Martine Lefevre", "martine.lefevre@essca.eu", 88],
+    ["Mathis Moreau", "mathis.moreau@essca.fr", 87], ["Maxime Marchand", "maxime.marchand@essca.eu", 86], ["Manon Mercier", "manon.mercier@essca.fr", 85],
+    ["Antoine Quesnel", "antoine.quesnel@essca.eu", 84], ["Anne-Laure Gautier", "anne-laure.gautier@essca.fr", 83], ["Alexandre Delmas", "alexandre.delmas@essca.eu", 82],
+    ["Amandine Ferrand", "amandine.ferrand@essca.eu", 81], ["Adele Perrin", "adele.perrin@essca.fr", 80], ["Baptiste Rousseau", "baptiste.rousseau@gmail.com", 79],
+    ["Camille Bernard", "camille.bernard@essca.fr", 78], ["Christelle Dubois", "christelle.dubois@essca.fr", 77], ["David Lambert", "david.lambert@essec.edu", 76],
+    ["Emma Girard", "emma.girard@essca.fr", 75], ["Fanny Lopez", "fanny.lopez@essca.eu", 74], ["Gabriel Roux", "gabriel.roux@essca.fr", 73],
+    ["Hugo Fontaine", "hugo.fontaine@essca.eu", 72], ["Ines Vincent", "ines.vincent@essca.fr", 71], ["Julie Henry", "julie.henry@essca.fr", 70],
+    ["Kevin Masson", "kevin.masson@essca.eu", 69], ["Laura Simon", "laura.simon@essca.fr", 68], ["Nicolas Michel", "nicolas.michel@essca.eu", 66],
+    ["Olivia Garcia", "olivia.garcia@essca.fr", 65], ["Paul Robert", "paul.robert@essca.eu", 64], ["Quentin Faure", "quentin.faure@essca.fr", 63],
+    ["Romain Blanc", "romain.blanc@essca.eu", 62], ["Sophie Guerin", "sophie.guerin@essca.fr", 61], ["Thomas Petit", "thomas.petit@essec.edu", 60],
+    ["Ugo Chevalier", "ugo.chevalier@essca.fr", 59], ["Valentin Leroy", "valentin.leroy@essca.eu", 58], ["Wang Li", "g.wang@essca.fr", 57],
+    ["Xavier Noel", "xavier.noel@essca.fr", 56], ["Yanis Perez", "yanis.perez@essca.eu", 55], ["Zoe Fabre", "zoe.fabre@essca.fr", 54],
+    ["Bob Durand", "b25123456@essec.edu", 53], ["Alice Durand", "b00654321@essec.edu", 52]
+  ];
+  function tokens(s) {
+    var n = (s == null ? "" : String(s)).toLowerCase().normalize("NFD").replace(/\p{Mn}/gu, "") + " ", t = [], w = "";
+    for (var i = 0; i < n.length; i++) { var c = n[i]; if ((c >= "a" && c <= "z") || (c >= "0" && c <= "9")) w += c; else if (w) { t.push(w); w = ""; } }
+    return t;
+  }
+  function ask(q) {
+    var qw = tokens(q);
+    return BOOK.map(function (b, i) { return { name: b[0], mail: b[1], w: b[2], i: i, toks: tokens(b[0] + " " + b[1]) }; })
+      .filter(function (c) { return qw.every(function (word) { return c.toks.some(function (t) { return t.indexOf(word) === 0; }); }); })
+      .sort(function (a, b) { return b.w - a.w || a.i - b.i; }).slice(0, CAP);
+  }
+  window.__ask = ask;
+
+  // Noms affichés par les pastilles (annuaire de l'établissement).
+  var ANNUAIRE = { "alice@exemple.fr": "MARTIN Alice", "moi@exemple.fr": "TESTEUR Moi" };
+  var adresseDe = new WeakMap(); // pastille -> adresse (l'adresse n'est PAS dans le DOM, comme Outlook)
+  var compteurREK = 0, compteurMsg = 0, importance = "normale";
+  window.__typed = []; window.__keys = []; window.__ailleurs = [];
+  var seg = "";
+
+  function differer(fn) {
+    if (CFG.pastille === "message") { var mc = new MessageChannel(); mc.port1.onmessage = function () { fn(); }; mc.port2.postMessage(1); }
+    else if (CFG.pastille === "timeout") setTimeout(fn, 50);
+    else fn();
+  }
+  function textesLibres(champ) { return [].filter.call(champ.childNodes, function (n) { return n.nodeType === 3; }); }
+  function texteLibre(champ) { return textesLibres(champ).map(function (n) { return n.nodeValue; }).join("").replace(/​/g, ""); }
+  function creerPastille(champ, adr) {
+    var nom = ANNUAIRE[adr.toLowerCase()] || adr;
+    var p = document.createElement("span");
+    p.id = "REK" + String(++compteurREK).padStart(6, "0");
+    p.className = "_Entity _EType_RECIPIENT_ENTITY _EReadonly_1 Lbs4W";
+    p.contentEditable = "false"; p.draggable = true;
+    p.setAttribute("aria-label", "offline" + nom);
+    p.innerHTML = '<span class="lpcWrapper"><span class="pill-222 validPill-223"><span id="presenceIcon" role="img" aria-label="offline"></span><span class="nom"></span></span></span>';
+    p.querySelector(".nom").textContent = nom;
+    adresseDe.set(p, adr);
+    champ.appendChild(document.createTextNode("​"));
+    champ.appendChild(p);
+    champ.appendChild(document.createTextNode("​"));
+  }
+  // Texte libre contenant « ; » ou « , » : chaque morceau complet devient une pastille.
+  function convertir(champ, ajout) {
+    var t = texteLibre(champ) + (ajout || "");
+    if (!/[;,]/.test(t)) { if (ajout) champ.appendChild(document.createTextNode(ajout)); return false; }
+    textesLibres(champ).forEach(function (n) { n.remove(); });
+    var morceaux = t.split(/[;,]/), reste = morceaux.pop();
+    morceaux.map(function (x) { return x.trim(); }).filter(Boolean).forEach(function (adr) { creerPastille(champ, adr); });
+    if (reste.trim()) champ.appendChild(document.createTextNode(reste));
+    if (champ.getAttribute("aria-label") === "À" && CFG.recharger === "apres-a" && unefois("apres-a")) recharger("apres-a");
+    sauverBrouillon();
+    return true;
+  }
+  function adresses(champ) { return champ ? [].slice.call(champ.querySelectorAll("._EType_RECIPIENT_ENTITY")).map(function (p) { return adresseDe.get(p); }) : []; }
+
+  // ------------------------------------------------------------ suggestions (relevé)
+  var tSugg = null;
+  function fermerSuggestions() { var c = document.getElementById("callout"); if (c) c.remove(); }
+  function placer(c, champ) { var r = champ.getBoundingClientRect(); c.style.left = Math.round(r.left) + "px"; c.style.top = Math.round(r.bottom + 2) + "px"; c.style.opacity = "1"; }
+  function afficherSuggestions(champ) {
+    var q = texteLibre(champ).trim();
+    if (!q || !document.contains(champ)) { fermerSuggestions(); return; }
+    var liste = ask(q), c = document.getElementById("callout");
+    if (!c) { c = document.createElement("div"); c.id = "callout"; c.className = "fui-Popover"; document.body.appendChild(c); }
+    var lb = document.createElement("div");
+    lb.setAttribute("role", "listbox"); lb.setAttribute("aria-label", "Contacts suggérés"); lb.id = "sugg-lb";
+    liste.forEach(function (x, i) {
+      var o = document.createElement("div");
+      o.setAttribute("role", "option"); o.id = "sugg-" + i; o.setAttribute("aria-label", x.name + ", " + x.mail);
+      var ini = x.name.split(/\s+/).map(function (w) { return w[0]; }).join("").slice(0, 2).toUpperCase();
+      o.innerHTML = '<div class="fui-Persona"><span class="fui-Avatar"><span class="fui-Avatar__initials"></span></span><span class="fui-Persona__primaryText"></span><span class="fui-Persona__secondaryText"></span></div>';
+      o.querySelector(".fui-Avatar__initials").textContent = ini;
+      o.querySelector(".fui-Persona__primaryText").textContent = x.name;
+      var m = o.querySelector(".fui-Persona__secondaryText"); m.textContent = x.mail; m.title = x.mail;
+      // Cliquer une suggestion la VALIDE (ce que le relevé ne doit jamais faire).
+      o.addEventListener("mousedown", function () { evt("clic-suggestion", { mail: x.mail }); window.__clicSuggestion = (window.__clicSuggestion || 0) + 1; });
+      lb.appendChild(o);
+    });
+    c.textContent = ""; c.appendChild(lb);
+    if (CFG.suggestions === "raf-position") { c.style.opacity = "0"; c.style.left = "0px"; c.style.top = "0px"; requestAnimationFrame(function () { placer(c, champ); }); }
+    else placer(c, champ);
+  }
+  function suggerer(champ) {
+    if (champ.getAttribute("aria-label") !== "À" || !CFG.suggestions) return;
+    if (CFG.suggestions === "debounce") { clearTimeout(tSugg); tSugg = setTimeout(function () { afficherSuggestions(champ); }, 150); }
+    else afficherSuggestions(champ);
+  }
+  function suivre(champ) {
+    var v = texteLibre(champ).trim();
+    if (v === "") { if (seg) { window.__typed.push(seg); evt("tape", { q: seg }); seg = ""; } }
+    else if (v.length >= seg.length) seg = v;
+  }
+  window.__segEnCours = function () { return seg; };
+
+  function brancherChamp(champ) {
+    champ.addEventListener("paste", function (e) {
+      var t = e.clipboardData && e.clipboardData.getData("text/plain");
+      if (!t) return;
+      e.preventDefault();
+      differer(function () { convertir(champ, t); });
+    });
+    champ.addEventListener("input", function () {
+      differer(function () { convertir(champ); });
+      suggerer(champ); suivre(champ); sauverBrouillon();
+    });
+    champ.addEventListener("keydown", function (e) {
+      window.__keys.push(e.key);
+      if (["Enter", "Tab", ";", ","].indexOf(e.key) >= 0) evt("touche", { champ: champ.getAttribute("aria-label"), key: e.key });
+    });
+  }
+
+  // Saisie ailleurs que dans un champ de destinataires (relevé : interdit).
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (!t || !t.closest || t.closest("[data-pp-panneau],[data-testid='ao-panel']")) return;
+    var lib = t.getAttribute && t.getAttribute("aria-label");
+    if (lib === "À" || lib === "Cc" || lib === "Cci") return;
+    var d = { champ: lib || t.id || t.tagName, data: e.data || null };
+    window.__ailleurs.push(d); evt("saisie-ailleurs", d);
+  }, true);
+
+  // ------------------------------------------------------------ brouillon (variante : restauré au rechargement)
+  function sauverBrouillon() {
+    var r = document.getElementById("redaction");
+    if (!r) { sessionStorage.removeItem("brouillon"); return; }
+    var o = document.querySelector('input[aria-label="Objet"]'), c = document.querySelector('[aria-label="Corps du message"]');
+    sessionStorage.setItem("brouillon", JSON.stringify({ a: adresses(document.querySelector('[aria-label="À"][contenteditable]')), objet: o ? o.value : "", corps: c ? c.innerHTML : "" }));
+  }
+
+  // ------------------------------------------------------------ rédaction
+  function ruban(redaction, objet) {
+    var t = document.getElementById("ruban-onglets");
+    [].slice.call(t.querySelectorAll(".redac")).forEach(function (x) { x.remove(); });
+    var rb = document.getElementById("ruban");
+    if (!redaction) {
+      document.getElementById("onglet-accueil").setAttribute("aria-selected", "true");
+      rb.setAttribute("aria-label", "Accueil");
+      rb.innerHTML = '<button type="button" id="nouveau" class="fui-Button" aria-label="Nouveau message">Nouveau message</button><button type="button" aria-label="Supprimer">Supprimer</button><button type="button" aria-label="Archiver">Archiver</button><button type="button" aria-label="Répondre">Répondre</button>';
+      brancherNouveau();
+      return;
+    }
+    document.getElementById("onglet-accueil").setAttribute("aria-selected", "false");
+    ["Message", "Insérer", "Mettre le texte en forme", "Dessiner", "Options"].forEach(function (nom) {
+      var b = document.createElement("button"); b.type = "button"; b.className = "redac"; b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(nom === "Message")); b.textContent = nom; t.appendChild(b);
+    });
+    var m = document.createElement("button"); m.type = "button"; m.className = "redac"; m.setAttribute("role", "tab"); m.setAttribute("aria-selected", "false");
+    m.textContent = "Modification de " + (objet || "(Aucun objet)"); t.appendChild(m);
+    rb.setAttribute("aria-label", "Message");
+    rb.innerHTML = '<button type="button" aria-label="Carnet d\'adresses">Carnet d\'adresses</button><button type="button" aria-label="Vérifier les noms">Vérifier les noms</button>' +
+      '<button type="button" aria-label="Joindre un fichier">Joindre un fichier</button><button type="button" aria-label="Signature">Signature</button>' +
+      '<button type="button" id="imp" aria-label="Importance élevée" aria-pressed="false">Importance élevée</button><button type="button" aria-label="Importance faible" aria-pressed="false">Importance faible</button>' +
+      '<button type="button" id="RibbonOverflowMenu-overflow" aria-label="Autres options">…</button>';
+    document.getElementById("imp").addEventListener("click", function () { importance = importance === "haute" ? "normale" : "haute"; this.setAttribute("aria-pressed", String(importance === "haute")); });
+  }
+  function fermer() {
+    document.getElementById("lecture").innerHTML = "";
+    fermerSuggestions();
+    importance = "normale";
+    ruban(false);
+    sessionStorage.removeItem("brouillon");
+  }
+  function ouvrirRedaction(brouillon) {
+    if (document.getElementById("redaction")) return;
+    var id = ++compteurMsg;
+    var z = document.getElementById("lecture");
+    z.innerHTML =
+      '<div id="redaction" class="redaction">' +
+      '<div class="barre-redaction" role="toolbar" aria-label="Rédaction">' +
+      '<span class="fui-SplitButton"><button type="button" id="splitButton-r200__primaryActionButton" aria-label="Envoyer" class="fui-Button fui-SplitButton__primaryActionButton">Envoyer</button>' +
+      '<button type="button" aria-label="Autres options d\'envoi" class="fui-Button fui-SplitButton__menuButton">˅</button></span>' +
+      '<button type="button" aria-label="Réglez votre sensibilité">Sensibilité</button>' +
+      '<button type="button" id="abandonner" aria-label="Abandonner">Abandonner</button>' +
+      '<button type="button" aria-label="Isoler">Isoler</button><button type="button" aria-label="Fermez">Fermer</button></div>' +
+      '<div class="LCArn" id="MSG_' + id + '_TO" role="group">' +
+      '<button type="button" data-is-focusable="true" tabindex="0" role="button" aria-roledescription="bouton, ouvre la boîte de dialogue Ajouter des destinataires" class="fui-Button r1f29ykk HnZn5" id="recipient-well-label-to">À</button>' +
+      '<span class="fui-Input"><div aria-label="À" tabindex="0" class="___h7sz9k0 EditorClass" spellcheck="false" contenteditable="true" id="12"></div></span>' +
+      '<button type="button" id="montrer-cc" title="Ajouter des destinataires Cc">Cc</button><button type="button" id="montrer-cci" title="Ajouter des destinataires Cci">Cci</button></div>' +
+      '<div><input type="text" maxlength="255" autocomplete="off" spellcheck="true" placeholder="Ajouter un objet" aria-label="Objet" id="MSG_' + id + '_SUBJECT" class="fui-Input__input r12stul0"></div>' +
+      '<div tabindex="0" dir="ltr" class="dFCbN customScrollBar" role="textbox" aria-multiline="true" aria-label="Corps du message" contenteditable="true" data-ms-editor="true" data-scrollable="true">' +
+      '<div class="elementToProof" style="font-family: Aptos, Aptos_EmbeddedFont, Calibri, Helvetica, sans-serif; font-size: 12pt;"><br></div>' +
+      '<div id="Signature"><div>--</div><div>Signature de test</div></div></div>' +
+      '</div>';
+    var a = document.getElementById("12"), objet = document.getElementById("MSG_" + id + "_SUBJECT"), corps = z.querySelector('[aria-label="Corps du message"]');
+    brancherChamp(a);
+    document.getElementById("montrer-cci").addEventListener("click", function () {
+      var l = document.createElement("div");
+      l.className = "LCArn"; l.id = "MSG_" + id + "_BCC"; l.setAttribute("role", "group");
+      l.innerHTML = '<button type="button" data-is-focusable="true" tabindex="0" role="button" aria-roledescription="bouton, ouvre la boîte de dialogue Ajouter des destinataires" class="fui-Button r1f29ykk HnZn5" id="recipient-well-label-bcc">Cci</button>' +
+        '<span class="fui-Input"><div aria-label="Cci" contenteditable="true" id="14"></div><input type="text" class="fui-Input__input" value=""></span>';
+      document.getElementById("MSG_" + id + "_TO").after(l);
+      this.remove();
+      brancherChamp(document.getElementById("14"));
+    });
+    objet.addEventListener("input", function () { sauverBrouillon(); });
+    // L'éditeur prend le collage en charge (HTML), comme Outlook.
+    corps.addEventListener("paste", function (e) {
+      var h = e.clipboardData && e.clipboardData.getData("text/html");
+      if (!h) return;
+      e.preventDefault();
+      document.execCommand("insertHTML", false, h);
+      sauverBrouillon();
+      if (CFG.recharger === "apres-corps" && unefois("apres-corps")) recharger("apres-corps");
+    });
+    var envoyer = document.getElementById("splitButton-r200__primaryActionButton");
+    envoyer.addEventListener("pointerover", function () { if (CFG.recharger === "survol-envoyer" && unefois("survol-envoyer")) recharger("survol-envoyer"); });
+    envoyer.addEventListener("click", function () {
+      if (CFG.bloque || window.__dechargement) return;
+      var mail = { a: adresses(a), cci: adresses(document.getElementById("14")), objet: objet.value, corps: corps.innerText, html: corps.innerHTML, importance: importance };
+      if (!mail.a.length && !mail.cci.length) return; // comme Outlook : au moins un destinataire
+      var envoi = fetch("/owa/service.svc?action=SendItem", { method: "POST", body: JSON.stringify(Object.assign({ onglet: ONGLET }, mail)), keepalive: true });
+      if (CFG.recharger === "apres-envoi" && unefois("apres-envoi")) {
+        // Parti, mais la page se recharge avant que la rédaction se referme (aucune confirmation vue).
+        envoi.then(function () { recharger("apres-envoi"); }, function () { recharger("apres-envoi"); });
+        return;
+      }
+      if (CFG.fermetureLente) setTimeout(fermer, CFG.fermetureLente); else fermer();
+      if (CFG.autoRecharge && unefois("auto-recharge")) setTimeout(function () { recharger("auto"); }, CFG.autoRecharge);
+      if (CFG.redirection && unefois("redirection")) setTimeout(function () { evt("redirection", {}); location.href = "https://login.microsoftonline.com/common/oauth2/authorize?client_id=fausse-page-de-test"; }, CFG.redirection);
+    });
+    document.getElementById("abandonner").addEventListener("click", fermer);
+    if (brouillon) {
+      (brouillon.a || []).forEach(function (adr) { creerPastille(a, adr); });
+      objet.value = brouillon.objet || "";
+      if (brouillon.corps) corps.innerHTML = brouillon.corps;
+    }
+    ruban(true, objet.value);
+    a.focus();
+    sauverBrouillon();
+  }
+  function brancherNouveau() {
+    var b = document.getElementById("nouveau");
+    if (!b) return;
+    b.addEventListener("click", function () {
+      if (CFG.redactionRaf) requestAnimationFrame(function () { ouvrirRedaction(); });
+      else ouvrirRedaction();
+    });
+  }
+  brancherNouveau();
+  if (CFG.restaurerBrouillon) {
+    var br = sessionStorage.getItem("brouillon");
+    if (br) { try { ouvrirRedaction(JSON.parse(br)); evt("brouillon-restaure", {}); } catch (e) {} }
+  }
+})();
+</script>
+</body>
+</html>

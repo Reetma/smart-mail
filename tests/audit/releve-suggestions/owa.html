@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Courrier - Outlook</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.35 "Segoe UI", sans-serif; background: #f3f2f1; }
+  #banniere { position: absolute; left: 0; right: 0; top: 0; height: 48px; background: #0f6cbd; display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+  #banniere input { width: 420px; height: 32px; margin-left: 200px; }
+  #rail { position: absolute; left: 0; top: 48px; bottom: 0; width: 48px; background: #e8e6e4; }
+  #dossiers { position: absolute; left: 48px; top: 48px; bottom: 0; width: 200px; background: #faf9f8; padding: 8px; }
+  #liste { position: absolute; left: 248px; top: 48px; bottom: 0; width: 360px; background: #fff; overflow: auto; border-right: 1px solid #ddd; }
+  #liste [role="option"] { padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+  #lecture { position: absolute; left: 608px; right: 0; top: 48px; bottom: 0; overflow: auto; background: #fff; }
+  #redaction { position: relative; margin: 10px 14px; padding: 10px; border: 1px solid #ddd; background: #fff; }
+  #redaction.dialogue { position: fixed; left: 300px; top: 70px; width: 700px; z-index: 50; box-shadow: 0 8px 30px rgba(0,0,0,.3); }
+  .ligne { display: flex; align-items: center; gap: 8px; min-height: 34px; border-bottom: 1px solid #eee; position: relative; }
+  .ligne > button { min-width: 40px; }
+  .EditorClass { flex: 1; min-height: 28px; padding: 4px; outline: none; }
+  #objet { width: 100%; height: 32px; margin: 6px 0; }
+  #corps { min-height: 160px; padding: 6px; border-top: 1px solid #eee; outline: none; }
+  .callout { position: absolute; z-index: 1000; width: 420px; background: #fff; border: 1px solid #c8c6c4; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+  .callout [role="option"] { display: block; padding: 6px 10px; cursor: pointer; }
+  .callout .entete { padding: 4px 10px; font-size: 12px; color: #616161; font-weight: 600; }
+  .fui-Persona { display: flex; gap: 8px; align-items: center; }
+  .fui-Avatar { width: 28px; height: 28px; border-radius: 50%; background: #c7e0f4; display: grid; place-items: center; font-size: 11px; }
+  .badge { font-size: 11px; background: #fde7e9; padding: 0 4px; border-radius: 3px; }
+  .plus-ligne { padding: 8px 10px; border-top: 1px solid #eee; cursor: pointer; color: #0f6cbd; }
+  ._Entity { background: #e1dfdd; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
+  #conversation { margin: 10px 14px; padding: 10px; border: 1px solid #ddd; }
+  #conversation a { display: inline-block; padding: 6px 12px; background: #e8f0fa; }
+</style>
+</head>
+<body>
+  <div id="banniere" role="banner">
+    <div role="search"><input id="recherche" role="combobox" aria-label="Recherchez des e-mails, des réunions, des fichiers et plus encore." autocomplete="off"></div>
+    <button aria-label="Conversation Teams">Teams</button>
+    <button aria-label="Ma journée">Ma journée</button>
+  </div>
+  <div id="rail"><button aria-label="Courrier">C</button></div>
+  <div id="dossiers"><button aria-label="Nouveau message" id="nouveau">Nouveau message</button><div>Boîte de réception</div><div>Éléments envoyés</div></div>
+  <div id="liste"></div>
+  <div id="lecture"></div>
+
+<script type="module">
+import { ask, tokens, PETIT, AVEC_GROUPES } from "./carnet.js";
+
+const P = new URLSearchParams(location.search);
+const CFG = Object.assign({
+  carnet: "PETIT", contacts: null,
+  cap: 5, initial: null, lot: 5,
+  plus: { libelle: "Afficher plus de résultats", ou: "pied", permanent: false, delai: 0 },
+  delai: 0, perime: false, muet: false, portail: false, haut: false,
+  forme: "fluent", surligner: false, ariaOption: false, titleMail: false, badges: true,
+  sections: false, doublons: false, virtuel: null,
+  listeMessages: { libelle: "Liste des messages", labelledby: false, apercus: true },
+  langue: "fr", conversation: null, redaction: "en-ligne", perimeCachee: false,
+  listboxLibelle: "Contacts suggérés", entetesLibelles: ["Contacts suggérés", "Annuaire"],
+}, JSON.parse(P.get("cfg") || "{}"));
+const BOOK = CFG.contacts || (CFG.carnet === "AVEC_GROUPES" ? AVEC_GROUPES : PETIT);
+const L = CFG.langue === "en"
+  ? { a: "To", cc: "Cc", objet: "Subject", objetPh: "Add a subject", corps: "Message body", envoyer: "Send", nouveau: "New mail" }
+  : { a: "À", cc: "Cc", objet: "Objet", objetPh: "Ajouter un objet", corps: "Corps du message", envoyer: "Envoyer", nouveau: "Nouveau message" };
+
+// ------------------------------------------------------------ instrumentation
+const typed = (window.__typed = []);           // recherches complètes tapées dans « À »
+const typedCc = (window.__typedCc = []);
+window.__keys = [];                              // touches reçues par « À »
+const V = (window.__violations = []);           // tout geste interdit (R1..R4, E6)
+window.__plusClics = 0;                          // clics sur « Afficher plus de résultats »
+window.__rendus = [];                            // (requête, nb affichés) — pour le diagnostic des tests
+let seg = "", segCc = "";
+function track(v, which) {
+  if (which === "cc") { if (v === "") { if (segCc) { typedCc.push(segCc); segCc = ""; } } else if (v.length >= segCc.length) segCc = v; return; }
+  if (v === "") { if (seg) { typed.push(seg); seg = ""; } } else if (v.length >= seg.length) seg = v;
+}
+document.addEventListener("ao-run-begin", () => { typed.length = 0; typedCc.length = 0; window.__keys.length = 0; seg = ""; segCc = ""; window.__plusClics = 0; });
+
+// ------------------------------------------------------------ boîte de réception
+const liste = document.getElementById("liste");
+if (CFG.listeMessages) {
+  liste.setAttribute("role", "listbox");
+  if (CFG.listeMessages.labelledby) {
+    const h = document.createElement("h2"); h.id = "liste-titre"; h.textContent = CFG.listeMessages.libelle; h.style.cssText = "font-size:14px;margin:6px 10px";
+    liste.appendChild(h); liste.setAttribute("aria-labelledby", "liste-titre");
+  } else liste.setAttribute("aria-label", CFG.listeMessages.libelle);
+  const apercus = CFG.listeMessages.apercus === false ? [] : [
+    "Apple — Vous n'obtenez pas souvent d'e-mail à partir de noreply@apple-test.example. Pourquoi c'est important",
+    "Scolarité — Merci de répondre à scolarite.inscriptions@ecole-test.fr avant vendredi",
+    "Jeanne Leclerc — Réunion de jeudi",
+    "Microsoft — Votre abonnement",
+  ];
+  for (const t of apercus) { const o = document.createElement("div"); o.setAttribute("role", "option"); o.textContent = t; liste.appendChild(o); }
+}
+
+// ------------------------------------------------------------ rédaction
+const lecture = document.getElementById("lecture");
+let champA = null, champCc = null, corps = null, objet = null;
+function construireRedaction() {
+  const r = document.createElement("div");
+  r.id = "redaction";
+  if (CFG.redaction === "dialogue") { r.className = "dialogue"; r.setAttribute("role", "dialog"); r.setAttribute("aria-label", L.nouveau); }
+  else r.setAttribute("aria-label", L.nouveau);
+  r.innerHTML = `
+    <div class="ligne" id="ligne-a"><button type="button" id="recipient-well-label-to">${L.a}</button><div aria-label="${L.a}" tabindex="0" class="EditorClass" spellcheck="false" contenteditable="true" id="champ-a"></div></div>
+    <div class="ligne" id="ligne-cc"><button type="button" id="recipient-well-label-cc">${L.cc}</button><div aria-label="${L.cc}" tabindex="0" class="EditorClass" spellcheck="false" contenteditable="true" id="champ-cc"></div></div>
+    <input type="text" maxlength="255" autocomplete="off" placeholder="${L.objetPh}" aria-label="${L.objet}" id="objet" value="">
+    <div tabindex="0" dir="ltr" role="textbox" aria-multiline="true" aria-label="${L.corps}" contenteditable="true" id="corps"><div class="elementToProof">Bonjour,</div><div class="elementToProof">Texte de l'utilisateur à ne pas toucher.</div></div>
+    <div><button type="button" aria-label="${L.envoyer}" id="envoyer">${L.envoyer}</button> <button type="button" aria-label="Abandonner">Abandonner</button></div>`;
+  lecture.insertBefore(r, lecture.firstChild);
+  champA = r.querySelector("#champ-a"); champCc = r.querySelector("#champ-cc"); corps = r.querySelector("#corps"); objet = r.querySelector("#objet");
+  brancher(champA, "a"); brancher(champCc, "cc");
+  r.querySelector("#envoyer").addEventListener("click", () => V.push("envoi:clic-envoyer"));
+  // Toute saisie hors des champs destinataires est interdite au relevé.
+  for (const [el, nom] of [[corps, "corps"], [objet, "objet"]]) {
+    el.addEventListener("beforeinput", () => V.push("saisie-ailleurs:" + nom));
+    el.addEventListener("input", () => V.push("saisie-ailleurs:" + nom));
+    el.addEventListener("keydown", (e) => V.push("touche-ailleurs:" + nom + ":" + e.key));
+  }
+}
+document.getElementById("recherche").addEventListener("input", () => V.push("saisie-ailleurs:recherche"));
+document.getElementById("recherche").addEventListener("keydown", (e) => V.push("touche-ailleurs:recherche:" + e.key));
+document.getElementById("nouveau").addEventListener("click", () => { if (!document.getElementById("redaction")) construireRedaction(); });
+if (CFG.redaction !== "absente") construireRedaction();
+
+// Conversation affichée SOUS la réponse en ligne (lettre d'information avec un lien
+// « Voir plus » : un lien d'un e-mail ne doit JAMAIS être cliqué par le relevé).
+if (CFG.conversation) {
+  const c = document.createElement("div"); c.id = "conversation";
+  c.innerHTML = `<div><b>Lettre d'information</b> &lt;news@lettre-test.example&gt;</div><p>Nos nouveautés de la semaine.</p>`;
+  for (const t of CFG.conversation.liens || ["Voir plus"]) {
+    const a = document.createElement("a"); a.href = "https://lettre-test.example/offres"; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = t;
+    a.addEventListener("click", (e) => { e.preventDefault(); V.push("clic-lien-email:" + t); });
+    const p = document.createElement("p"); p.appendChild(a); c.appendChild(p);
+  }
+  lecture.appendChild(c);
+}
+
+// ------------------------------------------------------------ champ destinataire
+function texteLibre(el) {
+  let s = "";
+  el.childNodes.forEach((n) => { if (n.nodeType === 3) s += n.data; else if (!(n.classList && n.classList.contains("_Entity"))) s += n.textContent; });
+  return s.replace(/​/g, "").trim();
+}
+let gen = 0, courant = { q: "", champ: null, res: [], montres: 0 };
+function brancher(el, which) {
+  el.addEventListener("input", () => {
+    const q = texteLibre(el);
+    track(q, which);
+    const g = ++gen;
+    if (!q) { fermer(el); return; }
+    if (CFG.muet) return;
+    const go = () => {
+      if (!CFG.perime && g !== gen) return; // réponse périmée : ignorée (comme une appli React)
+      ouvrir(el, q, g);
+    };
+    if (CFG.delai) { if (!CFG.perime) fermer(el); setTimeout(go, CFG.delai); } else go();
+  });
+  el.addEventListener("keydown", (e) => {
+    if (which === "a") window.__keys.push(e.key);
+    if (["Enter", "Tab", ";", ","].includes(e.key) && texteLibre(el)) {
+      V.push("validation:touche:" + e.key);
+      e.preventDefault();
+      valider(el, courant.res[0] || { nom: texteLibre(el), mail: texteLibre(el) });
+    }
+  });
+}
+function valider(el, c) {
+  // Le vrai Outlook remplace le texte tapé par une pastille (nom affiché).
+  [...el.childNodes].forEach((n) => { if (!(n.classList && n.classList.contains("_Entity"))) n.remove(); });
+  const pill = document.createElement("span");
+  pill.className = "_Entity _EType_RECIPIENT_ENTITY _EReadonly_1"; pill.contentEditable = "false"; pill.id = "REK" + Math.random().toString(16).slice(2, 8);
+  pill.setAttribute("aria-label", "offline" + c.nom); pill.textContent = c.nom;
+  el.appendChild(pill); el.appendChild(document.createTextNode("​"));
+  fermer(el);
+}
+
+// ------------------------------------------------------------ liste de suggestions
+// Une liste (callout) par champ. Fermée : retirée du DOM, ou (perimeCachee) gardée
+// montée avec visibility:hidden et son ancien contenu (Callout Fluent « hidden »).
+let callout = null;
+const callouts = new Map();
+function fermer(champ) {
+  const c = champ ? callouts.get(champ) : callout;
+  if (!c) return;
+  if (CFG.perimeCachee) c.style.visibility = "hidden";
+  else { (c._portal || c).remove(); callouts.delete(c._champ); }
+  if (c === callout) callout = null;
+}
+function initiales(nom) { return tokens(nom).slice(0, 2).map((w) => w[0].toUpperCase()).join(""); }
+// Texte avec la partie tapée en gras (motif courant des listes d'autocomplétion).
+function surligne(texte, q) {
+  const frag = document.createDocumentFragment();
+  if (!CFG.surligner) { frag.appendChild(document.createTextNode(texte)); return frag; }
+  const mots = tokens(q);
+  let i = 0;
+  const bas = texte.toLowerCase();
+  while (i < texte.length) {
+    const debutMot = i === 0 || !/[a-z0-9]/i.test(texte[i - 1]);
+    const m = debutMot ? mots.find((w) => bas.startsWith(w, i)) : null;
+    if (m) { const b = document.createElement("b"); b.className = "highlight"; b.textContent = texte.slice(i, i + m.length); frag.appendChild(b); i += m.length; }
+    else { let j = i + 1; while (j < texte.length && !(!/[a-z0-9]/i.test(texte[j - 1]) && mots.some((w) => bas.startsWith(w, j)))) j++; frag.appendChild(document.createTextNode(texte.slice(i, j))); i = j; }
+  }
+  return frag;
+}
+function option(c, q, idx) {
+  const o = document.createElement("div");
+  o.setAttribute("role", "option"); o.id = "sug-" + idx; o.setAttribute("aria-selected", "false");
+  const nomAff = c.affichage || c.nom;
+  const badge = CFG.badges && c.externe ? (CFG.badgeTexte || "Externe") : "";
+  const genre = c.type && c.type !== "personne" ? ({ groupe: "Groupe", liste: "Liste de distribution", salle: "Salle" })[c.type] : "";
+  if (CFG.ariaOption) o.setAttribute("aria-label", [nomAff, c.mail, badge, genre].filter(Boolean).join(", "));
+  const forme = CFG.forme;
+  if (forme === "v8") {
+    const p = document.createElement("div"); p.className = "ms-Persona-primaryText"; p.appendChild(surligne(nomAff, q));
+    const s = document.createElement("div"); s.className = "ms-Persona-secondaryText"; s.appendChild(surligne(c.mail, q));
+    o.appendChild(p); o.appendChild(s);
+  } else {
+    const per = document.createElement("div"); per.className = "fui-Persona";
+    const av = document.createElement("span"); av.className = "fui-Avatar"; const ini = document.createElement("span"); ini.className = "fui-Avatar__initials"; ini.textContent = initiales(nomAff); av.appendChild(ini);
+    if (c.type === "groupe" || c.type === "liste") av.setAttribute("aria-label", "Groupe");
+    per.appendChild(av);
+    const p = document.createElement("span"); p.className = "fui-Persona__primaryText"; p.appendChild(surligne(nomAff, q)); per.appendChild(p);
+    if (badge) { const b = document.createElement("span"); b.className = "badge"; b.textContent = badge; per.appendChild(b); }
+    if (genre && CFG.genreVisible !== false) { const g = document.createElement("span"); g.className = "fui-Persona__tertiaryText"; g.textContent = genre; per.appendChild(g); }
+    if (forme === "fluent") {
+      const s = document.createElement("span"); s.className = "fui-Persona__secondaryText"; if (CFG.titleMail) s.title = c.mail; s.appendChild(surligne(c.mail, q)); per.appendChild(s);
+    } else if (forme === "nomSeul-title") {
+      o.title = c.mail;
+    } else if (forme === "nomSeul-aria") {
+      if (!CFG.ariaOption) o.setAttribute("aria-label", nomAff + ", " + c.mail);
+    } // nomSeul-carte : l'adresse n'est que dans la carte de visite au survol (absente du DOM)
+    o.appendChild(per);
+  }
+  // Cliquer (ou appuyer) sur une suggestion VALIDE le destinataire : interdit au relevé.
+  const vise = (e) => { V.push("validation:" + e.type + ":" + c.mail); e.preventDefault(); valider(courant.champ || champA, c); };
+  o.addEventListener("mousedown", vise);
+  o.addEventListener("click", vise);
+  return o;
+}
+function ligneEntete(t) { const h = document.createElement("div"); h.className = "entete"; h.setAttribute("role", "presentation"); h.textContent = t; return h; }
+function lignePlus() {
+  const lib = CFG.plus.libelle;
+  let el;
+  if (CFG.plus.ou === "option") { el = document.createElement("div"); el.setAttribute("role", "option"); el.className = "plus-ligne"; el.textContent = lib; }
+  else if (CFG.plus.ou === "bouton-aria") { el = document.createElement("button"); el.type = "button"; el.className = "plus-ligne"; el.setAttribute("aria-label", lib); el.textContent = ""; const i = document.createElement("span"); i.className = "icone"; el.appendChild(i); el.style.minHeight = "28px"; el.style.width = "100%"; }
+  else { el = document.createElement("div"); el.setAttribute("role", "button"); el.tabIndex = 0; el.className = "plus-ligne"; el.textContent = "🔍 " + lib; }
+  el.id = "plus-resultats";
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    window.__plusClics++;
+    const g = gen, q = courant.q;
+    const go = () => { if (g !== gen || !callout) return; courant.montres = courant.montres + CFG.lot; dessiner(); };
+    if (CFG.plus.delai) setTimeout(go, CFG.plus.delai); else go();
+  });
+  return el;
+}
+function ouvrir(champ, q, g) {
+  courant = { q, champ, res: ask(BOOK, q), montres: CFG.initial == null ? CFG.cap : CFG.initial, g };
+  callout = callouts.get(champ) || null;
+  if (!callout) {
+    callout = document.createElement("div"); callout.className = "callout"; callout._champ = champ;
+    if (CFG.portail) { const portal = document.createElement("div"); portal.className = "fui-Portal"; portal.appendChild(callout); document.body.appendChild(portal); callout._portal = portal; }
+    else champ.closest(".ligne").appendChild(callout);
+    callouts.set(champ, callout);
+  }
+  callout.style.visibility = "";
+  dessiner();
+}
+function placer() {
+  const r = courant.champ.getBoundingClientRect();
+  if (CFG.portail) {
+    callout.style.position = "absolute";
+    callout.style.left = (r.left + scrollX) + "px";
+    if (CFG.haut) { callout.style.top = ""; callout.style.bottom = (innerHeight - r.top - scrollY + 2) + "px"; }
+    else callout.style.top = (r.bottom + scrollY + 2) + "px";
+  } else { callout.style.left = "48px"; callout.style.top = "100%"; }
+}
+function dessiner() {
+  const { q, res } = courant;
+  const montres = Math.min(courant.montres, res.length);
+  let affiches = res.slice(0, montres);
+  window.__rendus.push([q, affiches.length]);
+  callout.innerHTML = "";
+  const lb = document.createElement("div"); lb.setAttribute("role", "listbox"); lb.id = "sugg";
+  if (CFG.listboxLibelle) lb.setAttribute("aria-label", CFG.listboxLibelle);
+  let lignes = [];
+  if (CFG.sections && affiches.length) {
+    const [h1, h2] = CFG.entetesLibelles;
+    const recents = affiches.slice(0, 2), autres = affiches.slice(2);
+    lignes.push({ entete: h1 }); recents.forEach((c) => lignes.push({ c }));
+    if (autres.length || CFG.doublons) { lignes.push({ entete: h2 }); if (CFG.doublons) recents.forEach((c) => lignes.push({ c })); autres.forEach((c) => lignes.push({ c })); }
+  } else {
+    affiches.forEach((c) => lignes.push({ c }));
+    if (CFG.doublons) affiches.slice(0, 2).forEach((c) => lignes.push({ c }));
+  }
+  if (CFG.virtuel) {
+    const H = CFG.virtuel.hauteur, vis = CFG.virtuel.visibles;
+    lb.style.cssText = `position:relative;height:${H * vis}px;overflow-y:auto`;
+    const espace = document.createElement("div"); espace.style.height = (lignes.length * H) + "px"; espace.setAttribute("aria-hidden", "true"); lb.appendChild(espace);
+    const peindre = () => {
+      [...lb.querySelectorAll('[role="option"],.entete')].forEach((n) => n.remove());
+      const premier = Math.floor(lb.scrollTop / H), dernier = Math.min(lignes.length, premier + vis);
+      for (let i = premier; i < dernier; i++) {
+        const l = lignes[i], el = l.entete ? ligneEntete(l.entete) : option(l.c, q, i);
+        el.style.cssText = `position:absolute;left:0;right:0;top:${i * H}px;height:${H}px`;
+        lb.appendChild(el);
+      }
+    };
+    lb.addEventListener("scroll", peindre); peindre();
+  } else lignes.forEach((l, i) => lb.appendChild(l.entete ? ligneEntete(l.entete) : option(l.c, q, i)));
+  if (CFG.plus.ou === "option" && (CFG.plus.permanent || montres < res.length)) lb.appendChild(lignePlus());
+  callout.appendChild(lb);
+  if (CFG.plus.ou !== "option" && CFG.plus.ou !== "aucun" && (CFG.plus.permanent || montres < res.length)) callout.appendChild(lignePlus());
+  placer();
+}
+</script>
+</body>
+</html>

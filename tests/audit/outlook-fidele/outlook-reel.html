@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="fr" dir="ltr" data-pp-test="rapide">
+<head>
+<meta charset="utf-8">
+<title>Courrier - Moi - Outlook</title>
+<!--
+  Fausse page FIDÈLE au nouvel Outlook web (outlook.cloud.microsoft, interface FR,
+  établissement avec le complément de signature Letsignit), d'après la fiche de
+  référence tirée d'un diagnostic réel. Le comportement est dans outlook-reel.js ;
+  ce qui n'est pas connu du vrai Outlook est réglable par window.__OUTLOOK_CFG et
+  documenté comme « variante plausible ».
+-->
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; font: 14px/1.4 "Segoe UI", system-ui, sans-serif; color: #242424; background: #f5f5f5; }
+  #app { display: grid; grid-template-rows: 48px auto 1fr; height: 100vh; }
+  #haut { display: flex; align-items: center; gap: 12px; padding: 0 12px; background: #0f6cbd; color: #fff; }
+  #haut .logo { font-weight: 600; width: 180px; }
+  #haut [role="search"] { flex: 0 0 460px; position: relative; }
+  #haut input { width: 100%; height: 32px; border: 0; border-radius: 4px; padding: 0 10px; }
+  #haut .outils { display: flex; gap: 6px; margin-left: 20px; }
+  #haut button { background: transparent; border: 0; color: #fff; padding: 6px 8px; cursor: pointer; }
+  #recherche-sugg { position: absolute; top: 34px; left: 0; width: 460px; background: #fff; color: #242424; border: 1px solid #ddd; box-shadow: 0 4px 12px rgba(0,0,0,.2); z-index: 20; }
+  #recherche-sugg [role="option"] { padding: 6px 10px; }
+  #ruban { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 4px 8px; }
+  #ruban [role="tablist"] { display: flex; gap: 4px; }
+  #ruban [role="tab"] { background: none; border: 0; padding: 6px 10px; cursor: pointer; }
+  #ruban [role="tab"][aria-selected="true"] { border-bottom: 2px solid #0f6cbd; font-weight: 600; }
+  #commandes { display: flex; flex-wrap: nowrap; gap: 4px; padding: 6px 0; min-height: 40px; align-items: center; overflow: hidden; }
+  #commandes button { background: #fff; border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer; white-space: nowrap; }
+  #commandes button[aria-pressed="true"] { background: #cfe4fa; border-color: #0f6cbd; }
+  .fui-SplitButton { display: inline-flex; }
+  #corps-app { display: grid; grid-template-columns: 210px 320px 1fr; min-height: 0; }
+  #volet { background: #f0f0f0; padding: 8px; overflow: auto; }
+  #volet [role="treeitem"] { padding: 4px 8px; cursor: pointer; }
+  #volet .barre-apps { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  #liste { background: #fff; border-right: 1px solid #e0e0e0; overflow: auto; }
+  #liste .msg { position: relative; padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+  #liste .msg[aria-selected="true"] { background: #e8f1fb; }
+  #liste .msg .actions { display: none; position: absolute; right: 6px; top: 6px; gap: 2px; }
+  #liste .msg:hover .actions { display: flex; }
+  #droite { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: #fff; }
+  #onglets-docs { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid #eee; min-height: 30px; }
+  #onglets-docs .doc { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #ddd; border-radius: 4px; padding: 2px 6px; }
+  #lecture { padding: 12px 16px; }
+  .redaction { padding: 10px 16px; }
+  .redaction .barre { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .redaction .barre button { padding: 4px 10px; }
+  .ligne-dest { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #eee; padding: 4px 0; }
+  .ligne-dest > .libelle button { min-width: 36px; background: #fff; border: 1px solid #ccc; border-radius: 4px; }
+  .ligne-dest .fui-Input { display: flex; flex: 1; align-items: center; min-width: 0; }
+  .ligne-dest .LCArn { flex: 1; min-width: 0; }
+  .ligne-dest .EditorClass { min-height: 26px; padding: 3px 4px; outline: none; }
+  .ligne-dest .fui-Input__input { width: 0; min-width: 0; border: 0; padding: 0; height: 22px; }
+  .ligne-dest .bascules button { background: none; border: 0; color: #0f6cbd; cursor: pointer; }
+  ._EType_RECIPIENT_ENTITY { display: inline-block; background: #ebf3fc; border-radius: 12px; padding: 1px 8px; margin: 1px 2px; }
+  .invalidPill-224 { border-bottom: 1px dashed #c50f1f; }
+  .ligne-objet input { width: 100%; height: 32px; border: 0; border-bottom: 1px solid #eee; font-size: 15px; }
+  .dFCbN { min-height: 220px; padding: 8px 2px; outline: none; }
+  .fui-PopoverSurface { position: fixed; z-index: 1000; background: #fff; border: 1px solid #ddd; box-shadow: 0 6px 18px rgba(0,0,0,.18); width: 380px; }
+  .fui-PopoverSurface [role="option"] { padding: 4px 8px; cursor: pointer; }
+  .fui-PopoverSurface [role="option"][aria-selected="true"] { background: #e8f1fb; }
+  .fui-Persona { display: flex; gap: 6px; align-items: center; }
+  .fui-Avatar { width: 24px; height: 24px; border-radius: 50%; background: #c7e0f4; display: inline-grid; place-items: center; font-size: 10px; }
+  .fui-Persona__secondaryText { color: #616161; font-size: 12px; }
+  .pied-sugg { border-top: 1px solid #eee; padding: 6px 8px; color: #0f6cbd; cursor: pointer; }
+  [role="menu"] { position: fixed; z-index: 1100; background: #fff; border: 1px solid #ccc; box-shadow: 0 6px 18px rgba(0,0,0,.2); min-width: 220px; padding: 4px 0; }
+  [role="menu"] [role^="menuitem"] { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 6px 12px; cursor: pointer; }
+  /* Fluent v8 (Layer > Modal) : la fenêtre couvre tout l'écran, voile sombre, boîte centrée. */
+  .ms-Layer--fixed { position: fixed; inset: 0; z-index: 2000; }
+  .ms-Layer--fixed > [role="dialog"], .ms-Layer--fixed > [role="alertdialog"] { position: fixed; inset: 0; }
+  .ms-Modal.is-open { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .ms-Overlay { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
+  .ms-Dialog-main { position: relative; width: 460px; min-height: 220px; background: #fff; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+  .bandeau { padding: 8px 12px; background: #fff4ce; border-bottom: 1px solid #f0d000; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #323130; color: #fff; padding: 10px 16px; border-radius: 4px; z-index: 900; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="haut" role="banner">
+    <div class="logo">Outlook</div>
+    <div role="search">
+      <input type="text" role="combobox" aria-expanded="false" aria-autocomplete="list" autocomplete="off"
+        aria-label="Recherchez des e-mails, des réunions, des fichiers et plus encore." placeholder="Rechercher" data-ident="RECHERCHE" id="recherche">
+      <div role="listbox" id="recherche-sugg" aria-label="Suggestions de recherche" hidden></div>
+    </div>
+    <div class="outils">
+      <button type="button" aria-label="Conversation Teams" data-ident="haut:teams">💬</button>
+      <button type="button" aria-label="Ma journée" data-ident="haut:journee">📅</button>
+      <button type="button" aria-label="Notifications" data-ident="haut:notifications">🔔</button>
+      <button type="button" aria-label="Paramètres" data-ident="haut:parametres">⚙</button>
+    </div>
+  </div>
+  <div id="ruban" role="region" aria-label="Ruban">
+    <div role="tablist" aria-label="Onglets du ruban" id="onglets-ruban"></div>
+    <div role="toolbar" aria-label="Commandes" id="commandes"></div>
+  </div>
+  <div id="corps-app">
+    <nav id="volet" aria-label="Volet de navigation">
+      <div class="barre-apps">
+        <button type="button" aria-label="Courrier" data-ident="app:courrier">Courrier</button>
+        <button type="button" aria-label="Calendrier" data-ident="app:calendrier">Calendrier</button>
+        <button type="button" aria-label="Contacts" data-ident="app:contacts">Contacts</button>
+        <button type="button" aria-label="To Do" data-ident="app:todo">To Do</button>
+      </div>
+      <div role="tree" aria-label="Dossiers">
+        <div role="treeitem" aria-selected="true" data-ident="dossier:reception">Boîte de réception</div>
+        <div role="treeitem" data-ident="dossier:brouillons">Brouillons</div>
+        <div role="treeitem" data-ident="dossier:envoyes">Éléments envoyés</div>
+        <div role="treeitem" data-ident="dossier:boite-envoi">Boîte d'envoi</div>
+        <div role="treeitem" data-ident="dossier:supprimes">Éléments supprimés</div>
+      </div>
+    </nav>
+    <div id="liste" role="listbox" aria-label="Liste des messages"></div>
+    <div id="droite">
+      <div id="bandeaux"></div>
+      <div id="onglets-docs" role="tablist" aria-label="Éléments ouverts"></div>
+      <div id="lecture" role="main" aria-label="Volet de lecture"></div>
+      <div id="zone-redaction"></div>
+    </div>
+  </div>
+</div>
+<div id="calques"></div>
+<script src="/__fake/outlook-reel.js"></script>
+</body>
+</html>

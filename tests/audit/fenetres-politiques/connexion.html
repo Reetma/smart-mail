@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Se connecter à votre compte (fausse page)</title></head>
+<body>
+  <!-- Fausse page login.microsoftonline.com : la session Outlook a expiré, Outlook y
+       a redirigé l'onglet. Les scripts de Smart Mail ne doivent rien y faire (ils ne
+       sont pas déclarés pour ce domaine). -->
+  <h1>Microsoft</h1>
+  <p>Se connecter</p>
+  <input type="email" aria-label="Adresse e-mail, téléphone ou nom Skype" id="identifiant">
+  <button type="button" id="suivant">Suivant</button>
+  <script>
+    window.__saisies = [];
+    document.addEventListener("input", function (e) { window.__saisies.push(e.target.id || e.target.tagName); }, true);
+    document.documentElement.dataset.connexion = "1";
+  </script>
+</body>
+</html>

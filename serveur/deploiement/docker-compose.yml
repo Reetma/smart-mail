@@ -1,0 +1,27 @@
+# Smart Mail sur le VPS : l'application + Caddy (HTTPS automatique, indispensable
+# pour installer l'app sur téléphone et ordinateur).
+services:
+  smartmail:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - donnees:/data
+    expose:
+      - "8000"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAINE=${DOMAINE}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-donnees:/data
+    depends_on:
+      - smartmail
+volumes:
+  donnees:
+  caddy-donnees:

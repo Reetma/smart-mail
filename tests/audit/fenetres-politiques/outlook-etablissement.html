@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr" data-pp-test="rapide">
+<head>
+<meta charset="utf-8">
+<title>Courrier - Outlook (fausse page « établissement »)</title>
+<!--
+  Fausse page du nouvel Outlook web (interface FR), fidèle à la fiche de référence
+  (tests/audit : outlook-reel-reference.md) : champ « À » contenteditable
+  aria-label="À", pastilles _EType_RECIPIENT_ENTITY qui montrent le NOM, Objet
+  aria-label="Objet" (placeholder « Ajouter un objet »), corps role=textbox
+  aria-label="Corps du message", bouton Envoyer = split button
+  (#splitButton-r200__primaryActionButton) + « Autres options d'envoi »,
+  « Abandonner », « Réglez votre sensibilité », « Isoler », « Fermez », ruban
+  (Accueil, Afficher, Aide, Message, Insérer, Options), liste des messages
+  [role=listbox][aria-label="Liste des messages"], recherche role=combobox.
+
+  Les fenêtres, bandeaux, conseils et notifications que configurent les
+  établissements sont pilotés par window.__politique (voir outlook-etablissement.js).
+  Quand on ne sait pas exactement comment le vrai Outlook se comporte, ce sont des
+  variantes PLAUSIBLES (dites comme telles dans le rapport).
+-->
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px "Segoe UI", system-ui, sans-serif; color: #242424; }
+  header[role="banner"] { height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: #0f6cbd; color: #fff; }
+  header input { width: 380px; padding: 4px 8px; }
+  header button { background: none; border: 0; color: #fff; }
+  #bandeaux:empty { display: none; }
+  #ruban { border-bottom: 1px solid #ddd; padding: 4px 8px; min-height: 76px; }
+  #ruban [role="tablist"] { display: flex; gap: 6px; }
+  #ruban [role="tab"][aria-selected="true"] { border-bottom: 2px solid #0f6cbd; }
+  .panneau-ruban { padding: 6px 0; display: flex; gap: 6px; flex-wrap: wrap; }
+  .panneau-ruban[hidden] { display: none; }
+  #app { display: flex; min-height: 560px; }
+  nav { width: 56px; border-right: 1px solid #eee; display: flex; flex-direction: column; gap: 4px; padding: 4px; }
+  #liste { width: 270px; border-right: 1px solid #ddd; overflow: auto; }
+  #liste [role="option"] { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; }
+  #zone { flex: 1; position: relative; padding: 8px; }
+  .compose { border: 1px solid #ccc; padding: 8px; width: 540px; background: #fff; }
+  .cmd { display: flex; gap: 6px; margin-bottom: 6px; }
+  .entetes .ligne { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  .EditorClass, [contenteditable="true"] { border: 1px solid #ddd; min-height: 26px; padding: 3px; flex: 1; }
+  .fui-Input__input { width: 100%; padding: 4px; margin: 4px 0; }
+  .dFCbN { min-height: 140px; margin-top: 6px; }
+  ._Entity { background: #eef3fb; border-radius: 10px; padding: 1px 6px; margin-right: 4px; }
+  .invalidPill-224 { text-decoration: underline wavy #c50f1f; }
+  .fui-MessageBar { border: 1px solid #ccc; padding: 6px 8px; margin: 4px 0; display: flex; gap: 8px; align-items: center; }
+  .fui-MessageBar[data-intent="error"] { background: #fdf3f4; border-color: #eeacb2; }
+  .fui-MessageBar[data-intent="warning"] { background: #fff9f5; border-color: #fdcfb4; }
+  .callout { position: absolute; background: #fff; border: 1px solid #888; width: 340px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+  .callout [role="option"] { padding: 4px 8px; display: flex; gap: 6px; }
+  .fui-DialogSurface__backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 999990; }
+  .fui-DialogSurface { position: fixed; left: 320px; top: 120px; width: 480px; min-height: 180px; background: #fff; z-index: 999991; padding: 16px; border-radius: 8px; }
+  .ms-Layer { position: fixed; inset: 0; z-index: 999992; }
+  .ms-Overlay { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
+  .ms-Dialog-main { position: absolute; left: 330px; top: 140px; width: 440px; min-height: 220px; background: #fff; padding: 12px; }
+  .ms-Dialog-main iframe { width: 100%; height: 110px; border: 1px solid #eee; }
+  .non-modale { position: fixed; right: 440px; bottom: 16px; width: 330px; min-height: 140px; background: #fff; border: 1px solid #888; padding: 10px; z-index: 999980; }
+  .fui-Toaster { position: fixed; left: 360px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 999985; }
+  .fui-Toast { background: #fff; border: 1px solid #888; padding: 8px 10px; width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+  .ecran-session { padding: 60px; font-size: 18px; }
+</style>
+</head>
+<body>
+<header role="banner">
+  <span>Outlook</span>
+  <input type="text" role="combobox" aria-expanded="false" aria-label="Recherchez des e-mails, des réunions, des fichiers et plus encore." placeholder="Rechercher" id="recherche" data-faux-zone="recherche">
+  <button type="button" aria-label="Conversation Teams" data-faux-zone="entete">Teams</button>
+  <button type="button" aria-label="Ma journée" data-faux-zone="entete">Ma journée</button>
+  <button type="button" aria-label="Notifications" data-faux-zone="entete">🔔</button>
+  <button type="button" aria-label="Paramètres" data-faux-zone="entete">⚙</button>
+</header>
+<div id="bandeaux"></div>
+<div id="ruban">
+  <div role="tablist" aria-label="Ruban">
+    <button type="button" role="tab" id="onglet-accueil" aria-selected="true">Accueil</button>
+    <button type="button" role="tab" id="onglet-afficher" aria-selected="false">Afficher</button>
+    <button type="button" role="tab" id="onglet-aide" aria-selected="false">Aide</button>
+    <button type="button" role="tab" id="onglet-message" aria-selected="false" hidden>Message</button>
+    <button type="button" role="tab" id="onglet-inserer" aria-selected="false" hidden>Insérer</button>
+    <button type="button" role="tab" id="onglet-options" aria-selected="false" hidden>Options</button>
+  </div>
+  <div class="panneau-ruban" id="ruban-accueil">
+    <button type="button" aria-label="Nouveau message" id="nouveau" class="fui-Button">Nouveau message</button>
+    <button type="button" aria-label="Supprimer" data-faux-zone="interdit">Supprimer</button>
+    <button type="button" aria-label="Archiver" data-faux-zone="interdit">Archiver</button>
+  </div>
+  <div class="panneau-ruban" id="ruban-message" hidden>
+    <button type="button" aria-label="Carnet d'adresses" id="ruban-carnet" data-faux-zone="interdit">Carnet d'adresses</button>
+    <button type="button" aria-label="Vérifier les noms" id="ruban-verifier" data-faux-zone="interdit">Vérifier les noms</button>
+    <button type="button" aria-label="Joindre un fichier" data-faux-zone="interdit">Joindre un fichier</button>
+    <button type="button" aria-label="Importance élevée" id="ruban-importance" aria-pressed="false">Importance élevée</button>
+    <button type="button" aria-label="Importance faible" aria-pressed="false" data-faux-zone="interdit">Importance faible</button>
+    <button type="button" aria-label="Sensibilité" id="ruban-sensibilite" data-faux-zone="interdit">Sensibilité</button>
+    <button type="button" aria-label="Autres options" id="RibbonOverflowMenu-overflow">…</button>
+  </div>
+</div>
+<div id="app">
+  <nav aria-label="Navigation">
+    <button type="button" aria-label="Courrier" data-faux-zone="interdit">✉</button>
+    <button type="button" aria-label="Calendrier" data-faux-zone="interdit">📅</button>
+    <button type="button" aria-label="Contacts" data-faux-zone="interdit">👥</button>
+  </nav>
+  <div id="liste" role="listbox" aria-label="Liste des messages" data-faux-zone="liste">
+    <div role="option" aria-label="Jean Dupont, Réunion demain">Jean Dupont — Réunion demain — jean.dupont@ecole.fr</div>
+    <div role="option" aria-label="Service informatique, Maintenance">Service informatique — Maintenance samedi — support@ecole.fr</div>
+    <div role="option" aria-label="Newsletter">Newsletter — noreply@lettres.exemple.com</div>
+  </div>
+  <div id="zone"></div>
+</div>
+<div class="fui-Toaster" id="toaster"></div>
+<script src="/faux/outlook-etablissement.js"></script>
+</body>
+</html>

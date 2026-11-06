@@ -1,0 +1,18 @@
+# Dépendances et environnements locaux
+node_modules
+serveur/.venv/
+__pycache__/
+.pytest_cache/
+# Données locales (bases SQLite, comptes de démonstration)
+serveur/data/
+*.db
+*.db-wal
+*.db-shm
+# Secrets
+.env
+serveur/deploiement/.env
+# Sorties de tests et brouillons
+test-results/
+playwright-report/
+tests/audit-verif/
+.DS_Store

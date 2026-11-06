@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="fr" data-pp-test="rapide">
+<head>
+<meta charset="utf-8">
+<title>Courrier - Outlook (fausse page de test)</title>
+<style>
+  body { font-family: Segoe UI, sans-serif; margin: 0; }
+  #compose { border: 1px solid #ccc; margin: 20px; padding: 10px; width: 600px; }
+  .puce { background: #eef; padding: 2px 6px; margin-right: 4px; border-radius: 8px; }
+  [contenteditable] { border: 1px solid #ddd; min-height: 24px; padding: 4px; }
+</style>
+</head>
+<body>
+<header role="banner"><input aria-label="Rechercher" placeholder="Rechercher"></header>
+<button id="nouveau" aria-label="Nouveau message">Nouveau message</button>
+<div id="ruban"></div>
+<div id="zone"></div>
+<script>
+  // Imite la rédaction d'Outlook web : « À » éditable qui transforme
+  // « adresse; » en pastille, bouton « Cci » qui affiche le champ Cci, objet,
+  // corps avec signature, ruban (onglet « Message » : « Importance haute »),
+  // menu « Plus d'options » > « Définir l'importance », bouton Envoyer.
+  window.envoyes = [];
+  window.mode = "normal"; // "bloque" : Envoyer ne referme pas la rédaction
+  window.signature = null; // HTML de la signature (null : « --<br>Signature »)
+  window.signatureSurCollage = null; // HTML d'une signature posée après le collage (complément)
+  window.importanceMenu = false; // true : pas de bouton dans le ruban, seulement le menu « Plus d'options »
+  window.boutonSansEtat = false; // true : le bouton du ruban n'indique pas s'il est enfoncé (pas d'aria-pressed)
+  window.menuSansEtat = false; // true : les choix du menu n'indiquent pas lequel est coché (pas d'aria-checked)
+  function publier() { document.documentElement.dataset.envoyes = JSON.stringify(window.envoyes); }
+  publier();
+  document.getElementById("nouveau").addEventListener("click", function () {
+    if (document.getElementById("compose")) return;
+    var z = document.getElementById("zone");
+    z.innerHTML =
+      '<div id="compose" role="region" aria-label="Rédaction">' +
+      '<div class="ligne-a" role="group" id="MSG_TO"><button aria-label="À">À</button><div id="a" contenteditable="true" aria-label="À"></div>' +
+      '<button id="montrer-cci" aria-label="Afficher le champ Cci" title="Ajouter des destinataires en Cci">Cci</button></div>' +
+      '<input id="objet" aria-label="Ajouter un objet" placeholder="Ajouter un objet">' +
+      '<div id="corps" contenteditable="true" role="textbox" aria-label="Corps du message"><div><br></div><div id="Signature">' + (window.signature != null ? window.signature : '--<br>Signature') + '</div></div>' +
+      '<button id="envoyer" aria-label="Envoyer">Envoyer</button>' +
+      '<button id="ignorer" aria-label="Ignorer">Ignorer</button>' +
+      '<button id="plus" aria-label="Plus d\'options">…</button>' +
+      '</div>';
+    var importance = "normale";
+    // Ruban : onglets « Accueil » et « Message » ; « Importance haute » dans « Message ».
+    var ruban = document.getElementById("ruban");
+    ruban.innerHTML = '<div role="tablist"><button role="tab" aria-selected="true" id="onglet-accueil">Accueil</button><button role="tab" aria-selected="false" id="onglet-message">Message</button></div><div id="commandes"></div>';
+    document.getElementById("onglet-message").addEventListener("click", function () {
+      this.setAttribute("aria-selected", "true");
+      document.getElementById("onglet-accueil").setAttribute("aria-selected", "false");
+      if (window.importanceMenu) return;
+      document.getElementById("commandes").innerHTML = '<button id="imp" aria-label="Importance haute">!</button>';
+      var imp = document.getElementById("imp");
+      if (!window.boutonSansEtat) imp.setAttribute("aria-pressed", "false");
+      imp.addEventListener("click", function () {
+        importance = importance === "haute" ? "normale" : "haute";
+        if (!window.boutonSansEtat) this.setAttribute("aria-pressed", String(importance === "haute"));
+      });
+    });
+    // « Plus d'options » > « Définir l'importance » > Haute / Normale / Faible.
+    function fermerMenu() { var m = document.getElementById("menu"); if (m) m.remove(); }
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") fermerMenu(); });
+    document.getElementById("plus").addEventListener("click", function () {
+      fermerMenu();
+      var m = document.createElement("div");
+      m.id = "menu"; m.setAttribute("role", "menu");
+      m.innerHTML = '<button role="menuitem" id="m-sig">Insérer une signature</button><button role="menuitem" id="m-imp">Définir l\'importance</button>';
+      document.body.appendChild(m);
+      document.getElementById("m-imp").addEventListener("click", function () {
+        var sous = document.createElement("div");
+        sous.setAttribute("role", "menu");
+        ["Haute", "Normale", "Faible"].forEach(function (choix) {
+          var b = document.createElement("button");
+          b.setAttribute("role", "menuitemradio");
+          if (!window.menuSansEtat) b.setAttribute("aria-checked", String(importance === choix.toLowerCase()));
+          b.textContent = choix;
+          b.addEventListener("click", function () { importance = choix.toLowerCase(); fermerMenu(); });
+          sous.appendChild(b);
+        });
+        m.appendChild(sous);
+      });
+    });
+    var a = document.getElementById("a");
+    a.focus();
+    // Comme Outlook web récent : la pastille est DANS le champ « À », non éditable,
+    // role="group", id « REK… », libellé « offline » + nom, et montre le nom du
+    // contact s'il est dans l'annuaire (sinon l'adresse). L'adresse n'est pas visible.
+    var annuaire = { "moi@exemple.fr": "TESTEUR Moi", "alice@exemple.fr": "MARTIN Alice" };
+    var compteur = 0;
+    champDestinataires(a);
+    document.getElementById("montrer-cci").addEventListener("click", function () {
+      var l = document.createElement("div");
+      l.className = "ligne-cci"; l.setAttribute("role", "group"); l.id = "MSG_BCC";
+      l.innerHTML = '<button aria-label="Cci">Cci</button><div id="cci" contenteditable="true" aria-label="Cci"></div>';
+      document.getElementById("MSG_TO").after(l);
+      this.remove();
+      champDestinataires(document.getElementById("cci"));
+    });
+    function champDestinataires(a) {
+    function puces(t) {
+      t.split(";").map(function (x) { return x.trim(); }).filter(Boolean).forEach(function (adr) {
+        var nom = annuaire[adr.toLowerCase()] || adr;
+        var p = document.createElement("span");
+        p.contentEditable = "false"; p.id = "REK00000" + (++compteur);
+        p.setAttribute("aria-label", "offline" + nom);
+        p.className = "_Entity _EType_RECIPIENT_ENTITY _EReadonly_1"; p.dataset.adresse = adr;
+        var n = document.createElement("span"); n.textContent = nom; p.appendChild(n);
+        var x = document.createElement("button"); x.setAttribute("aria-label", "Supprimer " + nom); x.textContent = "x"; p.appendChild(x);
+        a.appendChild(p);
+        a.appendChild(document.createTextNode("\u200B")); // espace de largeur nulle, comme Outlook
+      });
+    }
+    function textesBruts() { return [].filter.call(a.childNodes, function (n) { return n.nodeType === 3; }); }
+    a.addEventListener("input", function () {
+      var t = textesBruts().map(function (n) { return n.nodeValue; }).join("").replace(/\u200B/g, "");
+      if (t.indexOf(";") >= 0) { textesBruts().forEach(function (n) { n.remove(); }); puces(t); }
+    });
+    // Comme Outlook : des adresses collées dans « À » deviennent des pastilles (sauf window.aCollerIgnore).
+    a.addEventListener("paste", function (e) {
+      if (window.aCollerIgnore) return;
+      var t = e.clipboardData && e.clipboardData.getData("text/plain");
+      if (!t) return;
+      e.preventDefault();
+      puces(t);
+    });
+    }
+    function adressesDe(id) {
+      var el = document.getElementById(id);
+      return el ? [].slice.call(el.querySelectorAll("._EType_RECIPIENT_ENTITY")).map(function (p) { return p.dataset.adresse; }) : [];
+    }
+    // Complément (Letsignit…) qui pose la signature juste après le collage.
+    document.getElementById("corps").addEventListener("paste", function () {
+      if (!window.signatureSurCollage) return;
+      var html = window.signatureSurCollage;
+      setTimeout(function () { var s = document.getElementById("Signature"); if (s) s.innerHTML = html; }, 0);
+    });
+    // Comme l'éditeur d'Outlook : il prend le collage en charge (sauf si window.collerIgnore).
+    document.getElementById("corps").addEventListener("paste", function (e) {
+      if (window.collerIgnore) return;
+      var h = e.clipboardData && e.clipboardData.getData("text/html");
+      if (!h) return;
+      e.preventDefault();
+      document.execCommand("insertHTML", false, h);
+    });
+    document.getElementById("envoyer").addEventListener("click", function () {
+      if (window.mode === "bloque") return;
+      var dest = adressesDe("a"), cci = adressesDe("cci");
+      if (!dest.length && !cci.length) return; // comme Outlook : au moins un destinataire
+      window.envoyes.push({ a: dest, cci: cci, importance: importance, objet: document.getElementById("objet").value, corps: document.getElementById("corps").innerText, html: document.getElementById("corps").innerHTML });
+      publier();
+      document.getElementById("zone").innerHTML = "";
+      ruban.innerHTML = "";
+    });
+    document.getElementById("ignorer").addEventListener("click", function () { document.getElementById("zone").innerHTML = ""; ruban.innerHTML = ""; });
+  });
+</script>
+</body>
+</html>
